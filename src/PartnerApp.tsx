@@ -14,7 +14,8 @@ import {
 } from 'react-native';
 import { apiRequest } from './api';
 import PartnerModules from './PartnerModules';
-import type { MenuItem, Order, Session } from './types';
+import ProfileAccess from './ProfileAccess';
+import type { MenuItem, Order, Session, User } from './types';
 
 type PartnerRole = 'restaurant' | 'shop';
 type PartnerTab = 'orders' | 'catalog' | 'coupons' | 'finance' | 'account';
@@ -38,6 +39,7 @@ type Props = {
   session: Session;
   partnerRole: PartnerRole;
   onSignOut: () => Promise<void>;
+  onSessionUserUpdate: (user: User) => Promise<void>;
 };
 
 const statusActions: Record<string, { next: string; label: string }[]> = {
@@ -54,7 +56,12 @@ function messageFrom(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
 }
 
-export default function PartnerApp({ session, partnerRole, onSignOut }: Props) {
+export default function PartnerApp({
+  session,
+  partnerRole,
+  onSignOut,
+  onSessionUserUpdate,
+}: Props) {
   const isShop = partnerRole === 'shop';
   const apiBase = `/api/${partnerRole}`;
   const itemPath = isShop ? 'items' : 'menu';
@@ -363,6 +370,20 @@ export default function PartnerApp({ session, partnerRole, onSignOut }: Props) {
         <Pressable onPress={() => void refresh()} style={styles.headerButton}>
           <Text style={styles.headerIcon}>↻</Text>
         </Pressable>
+        <ProfileAccess
+          session={session}
+          roleLabel={`${kind} partner`}
+          items={[
+            { key: 'orders', label: 'Orders', description: 'Accept and manage incoming orders', icon: '▤' },
+            { key: 'catalog', label: isShop ? 'Inventory' : 'Menu', description: 'Manage products and availability', icon: '☷' },
+            { key: 'coupons', label: 'Coupons & offers', description: 'Manage your promotions', icon: '％' },
+            { key: 'finance', label: 'Finance', description: 'View transfers and earnings', icon: '₹' },
+            { key: 'account', label: 'Business profile & bank', description: 'Edit business and payout details', icon: '⚙' },
+          ]}
+          onNavigate={(key) => setTab(key as PartnerTab)}
+          onSignOut={signOut}
+          onSessionUserUpdate={onSessionUserUpdate}
+        />
       </View>
       {!!error && (
         <Pressable onPress={() => setError('')} style={styles.errorBanner}>

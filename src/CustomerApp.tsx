@@ -14,6 +14,8 @@ import {
   View,
 } from 'react-native';
 import { apiPath, apiRequest } from './api';
+import ProfileAccess from './ProfileAccess';
+import type { ProfileMenuItem } from './ProfileAccess';
 import type {
   Address,
   CustomerNotification,
@@ -21,6 +23,7 @@ import type {
   Order,
   Session,
   Store,
+  User,
 } from './types';
 
 type Tab = 'browse' | 'cart' | 'orders' | 'addresses' | 'account';
@@ -41,21 +44,29 @@ type CouponValidation = {
   rejectedCoupons?: { code: string; reason: string }[];
 };
 type OrderTracking = {
+  orderId?: string;
+  orderNumber?: string;
+  riderUserId?: string;
   status?: string;
   trackingClosed?: boolean;
   estimatedMinutes?: number;
   expectedDeliveryTimingMinutes?: number;
+  telemetry?: {
+    etaMinutes?: number;
+    lastPingSecondsAgo?: number | null;
+    isLiveOnline?: boolean;
+    riderLocation?: { lat?: number; lng?: number };
+    currentLocation?: { lat?: number; lng?: number };
+  };
   isPickedUp?: boolean;
   pickupStatus?: string;
   rider?: {
     name?: string;
     phone?: string;
+    lastLocationUpdated?: string;
+    isOnline?: boolean;
     currentLocation?: { lat?: number; lng?: number };
     location?: { coordinates?: number[] };
-  };
-  telemetry?: {
-    riderLocation?: { lat?: number; lng?: number };
-    currentLocation?: { lat?: number; lng?: number };
   };
 };
 type Bill = {
@@ -81,6 +92,7 @@ type ReviewTarget = { orderId: string; itemId: string; itemName: string };
 type Props = {
   session: Session;
   onSignOut: () => Promise<void>;
+  onSessionUserUpdate: (user: User) => Promise<void>;
 };
 
 const tabs: { id: Tab; label: string; icon: string }[] = [
@@ -109,7 +121,7 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
 }
 
-export default function CustomerApp({ session, onSignOut }: Props) {
+export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }: Props) {
   const [tab, setTab] = useState<Tab>('browse');
   const [mode, setMode] = useState<BrowseMode>('restaurant');
   const [restaurants, setRestaurants] = useState<Store[]>([]);
@@ -126,6 +138,7 @@ export default function CustomerApp({ session, onSignOut }: Props) {
   const [validatingCoupon, setValidatingCoupon] = useState(false);
   const [trackingOrderId, setTrackingOrderId] = useState('');
   const [trackingByOrder, setTrackingByOrder] = useState<Record<string, OrderTracking>>({});
+  const [trackingErrors, setTrackingErrors] = useState<Record<string, string>>({});
   const [trackingBusyId, setTrackingBusyId] = useState('');
   const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null);
   const [reviewRating, setReviewRating] = useState(5);
@@ -297,16 +310,26 @@ export default function CustomerApp({ session, onSignOut }: Props) {
 
   async function loadTracking(orderId: string) {
     setTrackingBusyId(orderId);
+    setTrackingOrderId(orderId);
+    setTrackingErrors((current) => {
+      const next = { ...current };
+      delete next[orderId];
+      return next;
+    });
     setError('');
     try {
       const result = await apiRequest<{ tracking: OrderTracking }>(
         `/api/customer/orders/${encodeURIComponent(orderId)}/live-tracking`,
         session.token,
       );
+      if (!result.tracking) {
+        throw new Error('Tomato did not return tracking details for this order.');
+      }
       setTrackingByOrder((current) => ({ ...current, [orderId]: result.tracking }));
-      setTrackingOrderId(orderId);
     } catch (reason) {
-      setError(getErrorMessage(reason));
+      const message = getErrorMessage(reason);
+      setTrackingErrors((current) => ({ ...current, [orderId]: message }));
+      setError(message);
     } finally {
       setTrackingBusyId('');
     }
@@ -383,9 +406,19 @@ export default function CustomerApp({ session, onSignOut }: Props) {
           `/api/customer/orders/${encodeURIComponent(trackingOrderId)}/live-tracking`,
           session.token,
         );
+        if (!result.tracking) {
+          throw new Error('Tomato did not return tracking details for this order.');
+        }
         setTrackingByOrder((current) => ({ ...current, [trackingOrderId]: result.tracking }));
+        setTrackingErrors((current) => {
+          const next = { ...current };
+          delete next[trackingOrderId];
+          return next;
+        });
       } catch (reason) {
-        setError(getErrorMessage(reason));
+        const message = getErrorMessage(reason);
+        setTrackingErrors((current) => ({ ...current, [trackingOrderId]: message }));
+        setError(message);
       }
     }, 30_000);
     return () => clearInterval(interval);
@@ -705,13 +738,18 @@ export default function CustomerApp({ session, onSignOut }: Props) {
           >
             <Text style={styles.notificationIcon}>♢</Text>
           </Pressable>
-          <Pressable
-            accessibilityLabel="View delivery addresses"
-            onPress={() => setTab('addresses')}
-            style={styles.locationButton}
-          >
-            <Text style={styles.locationIcon}>⌖</Text>
-          </Pressable>
+          <ProfileAccess
+            session={session}
+            roleLabel="Customer"
+            items={[
+              { key: 'browse', label: 'Order Online', description: 'Browse restaurants, shops and menus', icon: '⌕' },
+              { key: 'orders', label: 'My orders', description: 'Track orders and view bills', icon: '▤' },
+              { key: 'addresses', label: 'Saved addresses', description: 'Manage delivery locations', icon: '⌖' },
+            ] satisfies ProfileMenuItem[]}
+            onNavigate={(key) => setTab(key as Tab)}
+            onSignOut={signOut}
+            onSessionUserUpdate={onSessionUserUpdate}
+          />
         </View>
       </View>
 
@@ -735,16 +773,54 @@ export default function CustomerApp({ session, onSignOut }: Props) {
             <Text style={styles.pageTitle}>Find your next favorite</Text>
             <Text style={styles.pageSubtitle}>Local kitchens and shops, delivered fresh.</Text>
             <View style={styles.dashboardTiles}>
+              <Pressable onPress={() => setTab('orders')} style={styles.dashboardTileAction}>
               <DashboardTile
                 label="Active orders"
                 value={orders.filter((order) => !['delivered', 'cancelled'].includes(order.status || '')).length}
               />
+              </Pressable>
               <DashboardTile
                 label="Cart items"
                 value={cart.reduce((count, line) => count + line.quantity, 0)}
               />
               <DashboardTile label="Addresses" value={addresses.length} />
             </View>
+            {!!orders.filter((order) => !['delivered', 'cancelled'].includes(order.status || '')).length && (
+              <View style={styles.dashboardOrders}>
+                <View style={styles.sectionHeadingRow}>
+                  <Text style={styles.sectionTitle}>Track an active order</Text>
+                  <Pressable onPress={() => setTab('orders')}>
+                    <Text style={styles.link}>All orders</Text>
+                  </Pressable>
+                </View>
+                {orders
+                  .filter((order) => !['delivered', 'cancelled'].includes(order.status || ''))
+                  .slice(0, 2)
+                  .map((order) => (
+                    <View key={order._id} style={styles.dashboardOrderRow}>
+                      <View style={styles.flex}>
+                        <Text style={styles.itemName}>{order.shopName || order.restaurantName || 'Tomato order'}</Text>
+                        <Text style={styles.itemDescription}>
+                          {order.orderNumber || 'Order'} · {(order.status || 'placed').replaceAll('_', ' ')}
+                        </Text>
+                      </View>
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={trackingBusyId === order._id}
+                        onPress={() => {
+                          setTab('orders');
+                          void loadTracking(order._id);
+                        }}
+                        style={styles.dashboardTrackButton}
+                      >
+                        <Text style={styles.dashboardTrackText}>
+                          {trackingBusyId === order._id ? 'Loading…' : 'Live tracking'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  ))}
+              </View>
+            )}
             {!!areaMessage && <Text style={styles.areaNotice}>{areaMessage}</Text>}
             <View style={styles.modeSwitch}>
               <ModeButton active={mode === 'restaurant'} label="Restaurants" onPress={() => selectMode('restaurant')} />
@@ -973,6 +1049,7 @@ export default function CustomerApp({ session, onSignOut }: Props) {
                 key={order._id}
                 order={order}
                 tracking={trackingByOrder[order._id]}
+                trackingError={trackingErrors[order._id]}
                 trackingLoading={trackingBusyId === order._id}
                 bill={bills[order._id]}
                 billLoading={billBusyId === order._id}
@@ -1270,6 +1347,7 @@ function openRiderLocation(lat: number, lng: number) {
 function OrderCard({
   order,
   tracking,
+  trackingError,
   trackingLoading,
   bill,
   billLoading,
@@ -1279,6 +1357,7 @@ function OrderCard({
 }: {
   order: Order;
   tracking?: OrderTracking;
+  trackingError?: string;
   trackingLoading: boolean;
   bill?: Bill;
   billLoading: boolean;
@@ -1355,16 +1434,47 @@ function OrderCard({
       {!isComplete && (
         <>
           <PrimaryButton disabled={trackingLoading} label={trackingLoading ? 'Updating tracking…' : tracking ? 'Refresh live tracking' : 'Track order'} onPress={onTrack} />
+          {trackingLoading && (
+            <View style={styles.trackingCard}>
+              <ActivityIndicator color="#d83a32" />
+              <Text style={styles.itemDescription}>Loading the latest order and rider details…</Text>
+            </View>
+          )}
+          {!!trackingError && (
+            <View style={styles.trackingError}>
+              <Text style={styles.trackingErrorText}>Tracking could not be refreshed: {trackingError}</Text>
+              <Pressable onPress={onTrack}><Text style={styles.link}>Try again</Text></Pressable>
+            </View>
+          )}
           {!!tracking && (
             <View style={styles.trackingCard}>
               <Text style={styles.trackingTitle}>{tracking.trackingClosed ? 'Tracking complete' : 'Live delivery status'}</Text>
               <Text style={styles.itemDescription}>
                 Status: {(tracking.status || order.status || 'placed').replaceAll('_', ' ')}
-                {tracking.isPickedUp || tracking.pickupStatus === 'picked_up' ? ' · Picked up' : ' · Awaiting pickup'}
+                {tracking.isPickedUp || tracking.pickupStatus === 'picked_up'
+                  ? ' · Picked up'
+                  : tracking.rider
+                    ? ' · Rider heading to pickup'
+                    : ' · Waiting for rider assignment'}
               </Text>
               {(tracking.estimatedMinutes ?? tracking.expectedDeliveryTimingMinutes) !== undefined && (
                 <Text style={styles.itemDescription}>
                   Estimated delivery: {tracking.estimatedMinutes ?? tracking.expectedDeliveryTimingMinutes} min
+                </Text>
+              )}
+              {!tracking.rider && !tracking.trackingClosed && (
+                <Text style={styles.itemDescription}>
+                  {['placed', 'pending'].includes(tracking.status || order.status || '')
+                    ? 'The restaurant or shop needs to accept this order before a rider can accept the delivery.'
+                    : 'Your order is accepted. A rider working in your area will appear here after accepting the delivery.'}
+                </Text>
+              )}
+              {!!tracking.rider && typeof tracking.telemetry?.lastPingSecondsAgo === 'number' && (
+                <Text style={styles.itemDescription}>
+                  Rider location updated {tracking.telemetry.lastPingSecondsAgo < 60
+                    ? `${tracking.telemetry.lastPingSecondsAgo} sec ago`
+                    : `${Math.floor(tracking.telemetry.lastPingSecondsAgo / 60)} min ago`}
+                  {tracking.telemetry.isLiveOnline === false ? ' · rider currently offline' : ''}
                 </Text>
               )}
               {!!tracking.rider?.name && <Text style={styles.itemDescription}>Rider: {tracking.rider.name}</Text>}
@@ -1477,8 +1587,6 @@ const styles = StyleSheet.create({
   },
   brand: { fontSize: 22, fontWeight: '800', color: '#d83a32', letterSpacing: -0.5 },
   delivering: { marginTop: 3, color: '#766b63', fontSize: 12 },
-  locationButton: { height: 42, width: 42, borderRadius: 14, backgroundColor: '#fff1eb', alignItems: 'center', justifyContent: 'center' },
-  locationIcon: { fontSize: 25, color: '#d83a32' },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   headerIconButton: { height: 42, width: 42, borderRadius: 14, backgroundColor: '#f7f2ed', alignItems: 'center', justifyContent: 'center' },
   notificationIcon: { fontSize: 27, color: '#635950' },
@@ -1491,8 +1599,13 @@ const styles = StyleSheet.create({
   pageSubtitle: { color: '#80766e', fontSize: 13, marginTop: 5, marginBottom: 18, lineHeight: 19 },
   dashboardTiles: { flexDirection: 'row', gap: 8, marginBottom: 17 },
   dashboardTile: { flex: 1, backgroundColor: '#fff', borderWidth: 1, borderColor: '#f0e8e1', borderRadius: 13, paddingHorizontal: 10, paddingVertical: 11 },
+  dashboardTileAction: { flex: 1 },
   dashboardTileValue: { color: '#d83a32', fontSize: 19, fontWeight: '800' },
   dashboardTileLabel: { color: '#766b63', fontSize: 10, fontWeight: '700', marginTop: 3 },
+  dashboardOrders: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#f0e8e1', borderRadius: 15, padding: 13, marginBottom: 15 },
+  dashboardOrderRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#f3ece6' },
+  dashboardTrackButton: { borderRadius: 9, backgroundColor: '#fff0eb', paddingHorizontal: 10, paddingVertical: 9 },
+  dashboardTrackText: { color: '#c8322a', fontSize: 11, fontWeight: '800' },
   areaNotice: { color: '#7b4c20', backgroundColor: '#fff7e8', borderRadius: 10, padding: 11, fontSize: 12, lineHeight: 18, marginBottom: 12 },
   modeSwitch: { flexDirection: 'row', backgroundColor: '#f4ece5', borderRadius: 14, padding: 4, marginBottom: 12 },
   modeButton: { flex: 1, paddingVertical: 11, borderRadius: 11, alignItems: 'center' },
@@ -1574,6 +1687,8 @@ const styles = StyleSheet.create({
   couponRow: { flexDirection: 'row', alignItems: 'center', borderTopColor: '#f0e8e1', borderTopWidth: 1, paddingVertical: 8 },
   couponCode: { color: '#c8322a', fontSize: 12, fontWeight: '800' },
   trackingCard: { borderRadius: 11, backgroundColor: '#f4f8ff', padding: 11, marginTop: 9 },
+  trackingError: { borderRadius: 11, backgroundColor: '#fff1f0', padding: 11, marginTop: 9 },
+  trackingErrorText: { color: '#a9241c', fontSize: 12, lineHeight: 17, marginBottom: 5 },
   trackingTitle: { color: '#214b7a', fontSize: 12, fontWeight: '800' },
   reviewItems: { borderTopColor: '#f0e8e1', borderTopWidth: 1, marginTop: 10, paddingTop: 8 },
   reviewItemsTitle: { color: '#4e453e', fontSize: 11, fontWeight: '800', marginBottom: 4 },

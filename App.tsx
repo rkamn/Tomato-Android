@@ -56,6 +56,16 @@ export default function App() {
     setSession(null);
   }
 
+  async function updateSessionUser(user: User) {
+    if (!session) return;
+    const nextSession = {
+      ...session,
+      user: { ...session.user, ...user },
+    };
+    await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(nextSession));
+    setSession(nextSession);
+  }
+
   return (
     <View style={styles.root}>
       <StatusBar style="dark" />
@@ -65,16 +75,17 @@ export default function App() {
         </View>
       ) : session ? (
         isAdminUser(session.user) ? (
-          <AdminApp session={session} onSignOut={signOut} />
+          <AdminApp session={session} onSignOut={signOut} onSessionUserUpdate={updateSessionUser} />
         ) : session.user.role === 'customer' ? (
-          <CustomerApp session={session} onSignOut={signOut} />
+          <CustomerApp session={session} onSignOut={signOut} onSessionUserUpdate={updateSessionUser} />
         ) : session.user.role === 'deliveryPartner' ? (
-          <RiderApp session={session} onSignOut={signOut} />
+          <RiderApp session={session} onSignOut={signOut} onSessionUserUpdate={updateSessionUser} />
         ) : session.user.role === 'restaurant' || session.user.role === 'shop' ? (
           <PartnerApp
             session={session}
             partnerRole={session.user.role as Extract<AccountRole, 'restaurant' | 'shop'>}
             onSignOut={signOut}
+            onSessionUserUpdate={updateSessionUser}
           />
         ) : (
           <AuthScreen onAuthenticated={signIn} />

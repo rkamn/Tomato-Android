@@ -16,7 +16,8 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import { apiRequest } from './api';
-import type { Order, Session } from './types';
+import ProfileAccess from './ProfileAccess';
+import type { Order, Session, User } from './types';
 
 type RiderTab = 'available' | 'active' | 'history' | 'account';
 type Earnings = {
@@ -47,6 +48,7 @@ type RiderBankDetails = {
 type Props = {
   session: Session;
   onSignOut: () => Promise<void>;
+  onSessionUserUpdate: (user: User) => Promise<void>;
 };
 
 function amount(value: number | undefined): string {
@@ -78,7 +80,7 @@ function openMap(address: string) {
   void Linking.openURL(url).catch(() => Alert.alert('Unable to open maps', 'Install a map application and try again.'));
 }
 
-export default function RiderApp({ session, onSignOut }: Props) {
+export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Props) {
   const [tab, setTab] = useState<RiderTab>('available');
   const [isOnline, setIsOnline] = useState(
     session.user.isApproved !== false && (session.user.isOnline ?? false),
@@ -490,6 +492,19 @@ export default function RiderApp({ session, onSignOut }: Props) {
         <Pressable onPress={() => void refresh()} style={styles.iconButton}>
           <Text style={styles.iconText}>↻</Text>
         </Pressable>
+        <ProfileAccess
+          session={session}
+          roleLabel="Delivery partner"
+          items={[
+            { key: 'available', label: 'Available deliveries', description: 'See orders in your service area', icon: '⌕' },
+            { key: 'active', label: 'My deliveries', description: 'Open your current delivery route', icon: '➤' },
+            { key: 'history', label: 'Earnings & history', description: 'Review completed deliveries and earnings', icon: '₹' },
+            { key: 'account', label: 'Account & payouts', description: 'Manage rider details and payout information', icon: '⚙' },
+          ]}
+          onNavigate={(key) => setTab(key as RiderTab)}
+          onSignOut={signOut}
+          onSessionUserUpdate={onSessionUserUpdate}
+        />
       </View>
       {!!error && (
         <Pressable onPress={() => setError('')} style={styles.errorBanner}>

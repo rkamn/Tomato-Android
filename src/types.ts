@@ -14,6 +14,17 @@ export type User = {
   isBlocked?: boolean;
   deliveryVehicle?: string;
   isOnline?: boolean;
+  dob?: string;
+  gsnNumber?: string;
+  address?: string;
+  restaurantAddress?: string;
+  shopAddress?: string;
+  city?: string;
+  pincode?: string;
+  postalCode?: string;
+  digipin?: string;
+  cuisine?: string;
+  category?: string;
 };
 
 export type AccountRole = 'customer' | 'restaurant' | 'shop' | 'deliveryPartner';

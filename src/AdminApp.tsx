@@ -14,6 +14,7 @@ import { apiRequest } from './api';
 import AdminControlPanel from './AdminControlPanel';
 import AdminOperations from './AdminOperations';
 import type { AdminOperationSection } from './AdminOperations';
+import ProfileAccess from './ProfileAccess';
 import type { Order, Session, User } from './types';
 
 type AdminTab = 'dashboard' | 'orders' | 'complaints' | 'accounts' | 'serviceArea' | 'team' | 'controlPanel'
@@ -104,9 +105,11 @@ function label(value: string): string {
 export default function AdminApp({
   session,
   onSignOut,
+  onSessionUserUpdate,
 }: {
   session: Session;
   onSignOut: () => Promise<void>;
+  onSessionUserUpdate: (user: User) => Promise<void>;
 }) {
   const role = session.user.role || '';
   const isSuperAdmin = role === 'superadmin';
@@ -420,15 +423,26 @@ export default function AdminApp({
             {session.user.adminRoleTitle || label(role)} · {session.user.name || session.user.email || 'Administrator'}
           </Text>
         </View>
-        <Pressable
-          style={styles.signOut}
-          onPress={() => Alert.alert('Sign out?', 'You can sign back in any time.', [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Sign out', style: 'destructive', onPress: () => void onSignOut() },
-          ])}
-        >
-          <Text style={styles.signOutText}>Sign out</Text>
-        </Pressable>
+        <ProfileAccess
+          session={session}
+          roleLabel={session.user.adminRoleTitle || label(role)}
+          items={tabs.map((item) => ({
+            key: item,
+            label: tabLabels[item],
+            description: item === 'controlPanel'
+              ? 'Staff, permissions and platform controls'
+              : `Open ${tabLabels[item].toLowerCase()} workspace`,
+            icon: item === 'orders' ? '▤' : item === 'complaints' ? '？' : item === 'team' ? '♙' : '◦',
+          }))}
+          onNavigate={(key) => setTab(key as AdminTab)}
+          onSignOut={() => {
+            Alert.alert('Sign out?', 'You can sign back in any time.', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Sign out', style: 'destructive', onPress: () => void onSignOut() },
+            ]);
+          }}
+          onSessionUserUpdate={onSessionUserUpdate}
+        />
       </View>
       <ScrollView
         horizontal

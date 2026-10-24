@@ -45,6 +45,11 @@ Android's secure storage.
 ## Features
 
 - Customer account registration and email/phone login
+- Right-side profile menu with role-specific shortcuts and profile settings,
+  including role-specific profile fields and password changes
+- Help & Support for customers, partners, riders, and admin staff with configured
+  contact details, role-specific ticket categories, priority selection, ticket
+  submission, ticket history, and resolve/reopen controls
 - Restaurant and shop browsing, menu search, and a single-store cart
 - Checkout with saved delivery addresses, server-validated coupons applied during order creation, and cash on delivery
 - Saved-address management, order history with automatic status refresh and server-generated bills, live order/rider tracking, and reviews for delivered items

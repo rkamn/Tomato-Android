@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -11,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { apiRequest } from './api';
+import { isValidDigipin, normalizeDigipin } from './digipin';
 import { isAdminUser } from './types';
 import type { AccountRole, User } from './types';
 
@@ -32,6 +34,37 @@ export default function AuthScreen({ onAuthenticated }: Props) {
   const [vehicle, setVehicle] = useState('motorcycle');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, () => {
+      setKeyboardOpen(true);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardOpen(false);
+      if (!registering) {
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
+      }
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [registering]);
+
+  function slideUpForInput(yOffset = 130) {
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({ y: yOffset, animated: true });
+    }, 80);
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({ y: yOffset, animated: true });
+    }, 260);
+  }
 
   async function submit() {
     setError('');
@@ -39,8 +72,19 @@ export default function AuthScreen({ onAuthenticated }: Props) {
       setError('Enter your name to create an account.');
       return;
     }
-    if (registering && (role === 'restaurant' || role === 'shop') && !digipin.trim()) {
-      setError('A pickup DIGIPIN is required to register a restaurant or shop.');
+    const cleanDigipin = normalizeDigipin(digipin);
+    if (registering && (role === 'restaurant' || role === 'shop')) {
+      if (!cleanDigipin) {
+        setError('A pickup DIGIPIN is required to register a restaurant or shop.');
+        return;
+      }
+      if (!isValidDigipin(cleanDigipin)) {
+        setError('Enter a valid pickup DIGIPIN (e.g. 10 alphanumeric characters).');
+        return;
+      }
+    }
+    if (registering && role === 'customer' && cleanDigipin && !isValidDigipin(cleanDigipin)) {
+      setError('Enter a valid delivery DIGIPIN (e.g. 10 alphanumeric characters).');
       return;
     }
     if (!identifier.trim() || !password) {
@@ -62,11 +106,12 @@ export default function AuthScreen({ onAuthenticated }: Props) {
                 name: name.trim(),
                 role,
                 ...(role === 'restaurant'
-                  ? { restaurantAddress: pickupAddress.trim(), pincode: pincode.trim(), digipin: digipin.trim() }
+                  ? { restaurantAddress: pickupAddress.trim(), pincode: pincode.trim(), digipin: cleanDigipin }
                   : {}),
                 ...(role === 'shop'
-                  ? { shopAddress: pickupAddress.trim(), pincode: pincode.trim(), digipin: digipin.trim() }
+                  ? { shopAddress: pickupAddress.trim(), pincode: pincode.trim(), digipin: cleanDigipin }
                   : {}),
+                ...(role === 'customer' && cleanDigipin ? { digipin: cleanDigipin } : {}),
                 ...(role === 'deliveryPartner' ? { deliveryVehicle: vehicle } : {}),
               }
               : {}),
@@ -86,7 +131,13 @@ export default function AuthScreen({ onAuthenticated }: Props) {
         setError('This Tomato app supports customer, restaurant, shop, rider, and provisioned admin accounts.');
         return;
       }
-      await onAuthenticated(result.token, result.user);
+      const userWithCustomer = {
+        ...result.user,
+        ...((result.user?.role === 'customer' || !result.user?.role) && !result.user?.customerId
+          ? { customerId: 'cust-1001' }
+          : {}),
+      };
+      await onAuthenticated(result.token, userWithCustomer);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to sign in.');
     } finally {
@@ -106,14 +157,19 @@ export default function AuthScreen({ onAuthenticated }: Props) {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView
-        contentContainerStyle={styles.container}
+        ref={scrollRef}
+        contentContainerStyle={[
+          styles.container,
+          keyboardOpen && styles.containerKeyboardOpen,
+        ]}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
         <View style={styles.brandMark}>
           <Text style={styles.brandEmoji}>🍅</Text>
         </View>
         <Text style={styles.brand}>Tomato</Text>
-        <Text style={styles.tagline}>One Tomato app for every role.</Text>
+        <Text style={styles.tagline}>One app for Food & Grocery</Text>
 
         <View style={styles.card}>
           <Text style={styles.title}>
@@ -122,7 +178,7 @@ export default function AuthScreen({ onAuthenticated }: Props) {
           <Text style={styles.subtitle}>
             {registering
               ? 'Choose your account type to get started.'
-              : 'Sign in to continue to your Tomato workspace.'}
+              : 'Sign in to continue Tomato workspace.'}
           </Text>
 
           {registering && (
@@ -153,6 +209,7 @@ export default function AuthScreen({ onAuthenticated }: Props) {
                 accessibilityLabel="Your name"
                 autoCapitalize="words"
                 onChangeText={setName}
+                onFocus={() => slideUpForInput(80)}
                 placeholder="Your name"
                 placeholderTextColor="#998f88"
                 style={styles.input}
@@ -163,6 +220,7 @@ export default function AuthScreen({ onAuthenticated }: Props) {
                   <TextInput
                     autoCapitalize="words"
                     onChangeText={setPickupAddress}
+                    onFocus={() => slideUpForInput(140)}
                     placeholder={role === 'shop' ? 'Shop pickup address' : 'Restaurant pickup address'}
                     placeholderTextColor="#998f88"
                     style={styles.input}
@@ -172,6 +230,7 @@ export default function AuthScreen({ onAuthenticated }: Props) {
                     keyboardType="number-pad"
                     maxLength={10}
                     onChangeText={setPincode}
+                    onFocus={() => slideUpForInput(180)}
                     placeholder="Serviceable pincode"
                     placeholderTextColor="#998f88"
                     style={styles.input}
@@ -180,6 +239,7 @@ export default function AuthScreen({ onAuthenticated }: Props) {
                   <TextInput
                     autoCapitalize="characters"
                     onChangeText={setDigipin}
+                    onFocus={() => slideUpForInput(220)}
                     placeholder="Pickup location DIGIPIN *"
                     placeholderTextColor="#998f88"
                     style={styles.input}
@@ -188,10 +248,25 @@ export default function AuthScreen({ onAuthenticated }: Props) {
                   <Text style={styles.fieldHint}>The web service requires a DIGIPIN to register partner locations.</Text>
                 </>
               )}
+              {role === 'customer' && (
+                <>
+                  <TextInput
+                    autoCapitalize="characters"
+                    onChangeText={setDigipin}
+                    onFocus={() => slideUpForInput(180)}
+                    placeholder="Delivery DIGIPIN (optional)"
+                    placeholderTextColor="#998f88"
+                    style={styles.input}
+                    value={digipin}
+                  />
+                  <Text style={styles.fieldHint}>Add your National Addressing Grid DIGIPIN for precise doorstep deliveries.</Text>
+                </>
+              )}
               {role === 'deliveryPartner' && (
                 <TextInput
                   autoCapitalize="none"
                   onChangeText={setVehicle}
+                  onFocus={() => slideUpForInput(160)}
                   placeholder="Delivery vehicle (e.g. motorcycle)"
                   placeholderTextColor="#998f88"
                   style={styles.input}
@@ -206,6 +281,7 @@ export default function AuthScreen({ onAuthenticated }: Props) {
             autoComplete="username"
             keyboardType="email-address"
             onChangeText={setIdentifier}
+            onFocus={() => slideUpForInput(registering ? 220 : 130)}
             placeholder="Email or mobile number"
             placeholderTextColor="#998f88"
             style={styles.input}
@@ -216,6 +292,7 @@ export default function AuthScreen({ onAuthenticated }: Props) {
             autoCapitalize="none"
             autoComplete={registering ? 'new-password' : 'current-password'}
             onChangeText={setPassword}
+            onFocus={() => slideUpForInput(registering ? 270 : 170)}
             onSubmitEditing={submit}
             placeholder="Password"
             placeholderTextColor="#998f88"
@@ -270,6 +347,11 @@ const styles = StyleSheet.create({
     padding: 24,
     paddingTop: 44,
     paddingBottom: 34,
+  },
+  containerKeyboardOpen: {
+    justifyContent: 'flex-start',
+    paddingTop: 20,
+    paddingBottom: 280,
   },
   brandMark: {
     alignSelf: 'center',

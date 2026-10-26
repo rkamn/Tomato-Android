@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import { apiRequest } from './api';
+import { formatDigipin } from './digipin';
 import ProfileAccess from './ProfileAccess';
 import type { Order, Session, User } from './types';
 
@@ -482,10 +483,10 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
   return (
     <View style={styles.app}>
       <View style={styles.header}>
-        <View style={styles.flex}>
+        <Pressable accessibilityLabel="Go to home screen" onPress={() => setTab('available')} style={styles.flex}>
           <Text style={styles.brand}>🍅 Tomato</Text>
           <Text style={styles.role}>Delivery partner</Text>
-        </View>
+        </Pressable>
         <Pressable onPress={() => void showNotifications()} style={styles.iconButton}>
           <Text style={styles.iconText}>♢</Text>
         </Pressable>
@@ -772,6 +773,9 @@ function RiderOrderCard({
           <Text style={styles.routeLabel}>PICKUP {order.shopName ? 'SHOP' : 'RESTAURANT'}</Text>
           <Text style={styles.routeName}>{order.shopName || order.restaurantName || 'Tomato partner'}</Text>
           <Text style={styles.muted}>{pickupAddress}</Text>
+          {!!(order.pickupDigipin || order.restaurantDigipin || order.shopDigipin) && (
+            <Text style={styles.phone}>⌖ DIGIPIN: {formatDigipin(order.pickupDigipin || order.restaurantDigipin || order.shopDigipin)}</Text>
+          )}
         </View>
         {mode !== 'history' && (
           <Pressable onPress={() => openMap(pickupAddress)} style={styles.mapButton}>
@@ -786,6 +790,9 @@ function RiderOrderCard({
           <Text style={styles.routeLabel}>CUSTOMER DROP</Text>
           <Text style={styles.routeName}>{order.customerName || 'Tomato customer'}</Text>
           <Text style={styles.muted}>{dropAddress || 'Delivery address unavailable'}</Text>
+          {!!order.deliveryAddress?.digipin && (
+            <Text style={styles.phone}>⌖ DIGIPIN: {formatDigipin(order.deliveryAddress.digipin)}</Text>
+          )}
           {!!phone && <Text style={styles.phone}>{phone}</Text>}
         </View>
         {mode !== 'history' && (

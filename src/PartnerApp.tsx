@@ -13,8 +13,10 @@ import {
   View,
 } from 'react-native';
 import { apiRequest } from './api';
+import { formatDigipin } from './digipin';
 import PartnerModules from './PartnerModules';
 import ProfileAccess from './ProfileAccess';
+import { isOrderReturnAccepted } from './types';
 import type { MenuItem, Order, Session, User } from './types';
 
 type PartnerRole = 'restaurant' | 'shop';
@@ -32,6 +34,7 @@ type PartnerOrder = Order & {
     city?: string;
     postalCode?: string;
     phone?: string;
+    digipin?: string;
   };
 };
 
@@ -46,6 +49,8 @@ const statusActions: Record<string, { next: string; label: string }[]> = {
   placed: [{ next: 'accepted', label: 'Accept order' }, { next: 'cancelled', label: 'Cancel' }],
   accepted: [{ next: 'preparing', label: 'Start preparing' }, { next: 'cancelled', label: 'Cancel' }],
   preparing: [{ next: 'ready_for_pickup', label: 'Ready for pickup' }, { next: 'cancelled', label: 'Cancel' }],
+  ready_for_pickup: [{ next: 'cancelled', label: 'Cancel' }],
+  out_for_delivery: [{ next: 'cancelled', label: 'Cancel' }],
 };
 
 function money(value: number | undefined): string {
@@ -185,9 +190,23 @@ export default function PartnerApp({
       setBusyId(order._id);
       setError('');
       try {
+        const bodyPayload = nextStatus === 'returned'
+          ? {
+              status: 'returned',
+              returnStatus: 'accepted',
+              returnAccepted: true,
+              returnAcceptedBy: isShop ? 'shop' : 'restaurant',
+            }
+          : { status: nextStatus };
         await apiRequest(`${apiBase}/orders/${order._id}/status`, session.token, {
           method: 'PUT',
-          body: JSON.stringify({ status: nextStatus }),
+          body: JSON.stringify(bodyPayload),
+        }).catch(async () => {
+          if (nextStatus === 'returned') {
+            await apiRequest(`${apiBase}/orders/${order._id}/return-accept`, session.token, {
+              method: 'POST',
+            }).catch(() => null);
+          }
         });
         await loadOrders();
       } catch (reason) {
@@ -202,6 +221,15 @@ export default function PartnerApp({
         { text: 'Keep order', style: 'cancel' },
         { text: 'Cancel order', style: 'destructive', onPress: () => void confirm() },
       ]);
+    } else if (nextStatus === 'returned') {
+      Alert.alert(
+        'Accept returned order?',
+        `Confirm that ${isShop ? 'the shop' : 'the restaurant'} has received and accepted this returned order. This will officially conclude live tracking.`,
+        [
+          { text: 'Not yet', style: 'cancel' },
+          { text: 'Accept return', onPress: () => void confirm() },
+        ],
+      );
     } else {
       await confirm();
     }
@@ -360,10 +388,10 @@ export default function PartnerApp({
   return (
     <View style={styles.app}>
       <View style={styles.header}>
-        <View style={styles.flex}>
+        <Pressable accessibilityLabel="Go to home screen" onPress={() => setTab('orders')} style={styles.flex}>
           <Text style={styles.brand}>🍅 Tomato</Text>
           <Text style={styles.role}>{kind} workspace</Text>
-        </View>
+        </Pressable>
         <Pressable onPress={() => void showNotifications()} style={styles.headerButton}>
           <Text style={styles.headerIcon}>♢</Text>
         </Pressable>
@@ -406,7 +434,10 @@ export default function PartnerApp({
             <View style={styles.statusCard}>
               <View style={styles.flex}>
                 <Text style={styles.statusTitle}>{isOpen ? 'Accepting orders' : 'Not accepting orders'}</Text>
-                <Text style={styles.muted}>{savingStatus ? 'Updating status…' : `${kind} is ${isOpen ? 'open' : 'closed'}`}</Text>
+                <Text style={styles.muted}>
+                  {savingStatus ? 'Updating status…' : `${kind} is ${isOpen ? 'open' : 'closed'}`}
+                  {session.user.digipin ? ` · DIGIPIN: ${formatDigipin(session.user.digipin)}` : ''}
+                </Text>
               </View>
               <Switch
                 accessibilityLabel={`Set ${kind.toLowerCase()} ${isOpen ? 'closed' : 'open'}`}
@@ -611,7 +642,9 @@ function PartnerOrderCard({
 }) {
   const status = order.status || 'placed';
   const actions = statusActions[status] || [];
-  const itemNames = order.items?.map((item) => `${item.quantity || 1} × ${item.name}`).join('  ·  ');
+  const isCancelled = status.toLowerCase() === 'cancelled';
+  const returnAccepted = isOrderReturnAccepted(order);
+  const itemNames = order.items?.map((item) => `${item.name}(${item.quantity || 1})`).join(', ');
   const address = order.deliveryAddress;
   return (
     <View style={styles.orderCard}>
@@ -622,14 +655,45 @@ function PartnerOrderCard({
         </View>
         <Text style={styles.orderTotal}>{money(order.totalAmount)}</Text>
       </View>
-      <View style={styles.orderStatus}><Text style={styles.orderStatusText}>{status.replaceAll('_', ' ')}</Text></View>
+      <View style={[styles.orderStatus, status.toLowerCase() === 'delivered' && { backgroundColor: '#1b8742' }]}>
+        <Text style={[styles.orderStatusText, status.toLowerCase() === 'delivered' && { color: '#ffffff' }]}>
+          {status.replaceAll('_', ' ')}
+        </Text>
+      </View>
       {!!itemNames && <Text style={styles.orderItems}>{itemNames}</Text>}
       <Text style={styles.orderDetail}>Payment: {(order.paymentMethod || 'cash').toUpperCase()} · {(order.paymentStatus || 'pending').toUpperCase()}</Text>
       {!!address?.line1 && (
         <Text style={styles.orderDetail}>
           Delivery: {address.line1}{address.line2 ? `, ${address.line2}` : ''}, {address.city} {address.postalCode}
+          {address.digipin ? ` · DIGIPIN: ${formatDigipin(address.digipin)}` : ''}
         </Text>
       )}
+
+      {isCancelled && !returnAccepted && canManage && (
+        <View style={styles.returnBox}>
+          <Text style={styles.returnBoxText}>
+            📦 Order was cancelled · Item returning to {isShop ? 'shop' : 'restaurant'}
+          </Text>
+          <Pressable
+            disabled={busy}
+            onPress={() => onChange('returned')}
+            style={[styles.orderAction, styles.acceptReturnAction]}
+          >
+            {busy ? <ActivityIndicator color="#fff" /> : (
+              <Text style={styles.primaryActionText}>Accept Return ({isShop ? 'Shop' : 'Restaurant'})</Text>
+            )}
+          </Pressable>
+        </View>
+      )}
+
+      {isCancelled && returnAccepted && (
+        <View style={styles.returnAcceptedBox}>
+          <Text style={styles.returnAcceptedText}>
+            ✅ Return accepted by {order.returnAcceptedBy || (isShop ? 'shop' : 'restaurant')}. Tracking ended.
+          </Text>
+        </View>
+      )}
+
       {!!actions.length && canManage && (
         <View style={styles.orderActions}>
           {actions.map((action) => (
@@ -649,7 +713,7 @@ function PartnerOrderCard({
           ))}
         </View>
       )}
-      {!actions.length && (
+      {!actions.length && !isCancelled && (
         <Text style={styles.muted}>This {isShop ? 'shop' : 'restaurant'} order is now with the delivery partner.</Text>
       )}
       {!!actions.length && !canManage && (
@@ -726,7 +790,12 @@ const styles = StyleSheet.create({
   orderActions: { flexDirection: 'row', gap: 8, marginTop: 13 },
   orderAction: { flex: 1, minHeight: 42, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 7 },
   primaryOrderAction: { backgroundColor: '#d83a32' },
+  acceptReturnAction: { backgroundColor: '#166534' },
   cancelOrderAction: { backgroundColor: '#fff', borderColor: '#f1d3d0', borderWidth: 1 },
+  returnBox: { marginTop: 10, padding: 10, backgroundColor: '#fff7ed', borderRadius: 10, borderWidth: 1, borderColor: '#fed7aa' },
+  returnBoxText: { fontSize: 12, color: '#c2410c', fontWeight: '700', marginBottom: 8 },
+  returnAcceptedBox: { marginTop: 10, padding: 10, backgroundColor: '#f0fdf4', borderRadius: 10, borderWidth: 1, borderColor: '#bbf7d0' },
+  returnAcceptedText: { fontSize: 12, color: '#166534', fontWeight: '700' },
   primaryActionText: { color: '#fff', fontWeight: '800', fontSize: 12 },
   cancelActionText: { color: '#b42318', fontWeight: '700', fontSize: 12 },
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

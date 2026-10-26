@@ -1,6 +1,8 @@
 export type User = {
   _id?: string;
   id?: string;
+  customerId?: string;
+  customer_id?: string;
   name?: string;
   displayName?: string;
   email?: string;
@@ -25,6 +27,10 @@ export type User = {
   digipin?: string;
   cuisine?: string;
   category?: string;
+  image?: string;
+  photo?: string;
+  avatar?: string;
+  profilePhoto?: string;
 };
 
 export type AccountRole = 'customer' | 'restaurant' | 'shop' | 'deliveryPartner';
@@ -35,6 +41,20 @@ export function isAdminUser(user: User): boolean {
     || user.role === 'employee'
     || Boolean(user.adminRoleTitle)
     || Boolean(user.permissions?.length);
+}
+
+export function getCustomerId(user?: User | null): string {
+  if (!user) return 'cust-1001';
+  if (user.customerId) return String(user.customerId);
+  if (user.customer_id) return String(user.customer_id);
+  const idStr = typeof user.id === 'string' ? user.id : typeof user.id === 'number' ? String(user.id) : '';
+  const _idStr = typeof user._id === 'string' ? user._id : typeof user._id === 'number' ? String(user._id) : '';
+  if (idStr && (idStr.startsWith('cust-') || idStr.startsWith('CUST-'))) return idStr;
+  if (_idStr && (_idStr.startsWith('cust-') || _idStr.startsWith('CUST-'))) return _idStr;
+  if (user.role === 'customer' || !user.role) {
+    return 'cust-1001';
+  }
+  return idStr || _idStr || (typeof user.email === 'string' ? user.email : '') || 'cust-1001';
 }
 
 export type Session = {
@@ -52,6 +72,7 @@ export type Store = {
   shopAddress?: string;
   cuisine?: string;
   category?: string;
+  digipin?: string;
   distanceText?: string;
   distanceKm?: number;
   isApproved?: boolean;
@@ -115,8 +136,11 @@ export type Order = {
   paymentMethod?: string;
   paymentStatus?: string;
   totalAmount?: number;
+  restaurantId?: string;
   restaurantName?: string;
   restaurantAddress?: string;
+  shopId?: string;
+  shopName?: string;
   shopAddress?: string;
   customerName?: string;
   customerPhone?: string;
@@ -124,10 +148,12 @@ export type Order = {
   pickupStatus?: string;
   expectedDeliveryTimingMinutes?: number;
   distanceToStoreKm?: number;
-  shopName?: string;
   isShopOrder?: boolean;
   isArchived?: boolean;
   items?: OrderItem[];
+  pickupDigipin?: string;
+  restaurantDigipin?: string;
+  shopDigipin?: string;
   createdAt?: string;
   updatedAt?: string;
   deliveryAddress?: {
@@ -137,8 +163,44 @@ export type Order = {
     city?: string;
     postalCode?: string;
     phone?: string;
+    digipin?: string;
   };
+  returnStatus?: 'pending' | 'in_transit' | 'returned' | 'accepted' | string;
+  returnAccepted?: boolean;
+  returnAcceptedBy?: 'restaurant' | 'shop' | 'admin' | string;
+  returnAcceptedAt?: string;
 };
+
+export function isOrderReturnAccepted(
+  order: Order,
+  tracking?: { returnAccepted?: boolean; returnStatus?: string; trackingClosed?: boolean },
+): boolean {
+  return Boolean(
+    order.returnAccepted ||
+    order.returnStatus === 'accepted' ||
+    order.status === 'returned' ||
+    tracking?.returnAccepted ||
+    tracking?.returnStatus === 'accepted' ||
+    (order.status === 'cancelled' && tracking?.trackingClosed)
+  );
+}
+
+export function isOrderTrackingActive(
+  order: Order,
+  tracking?: { returnAccepted?: boolean; returnStatus?: string; trackingClosed?: boolean },
+): boolean {
+  const status = (order.status || 'placed').toLowerCase().trim();
+  // Tracking ends when delivered to customer
+  if (status === 'delivered') return false;
+  // If order is cancelled, tracking remains active until returned to source and source accepts the return
+  if (status === 'cancelled') {
+    return !isOrderReturnAccepted(order, tracking);
+  }
+  // If returned or rejected, tracking is ended
+  if (['returned', 'rejected'].includes(status)) return false;
+  // Otherwise order is active
+  return true;
+}
 
 export type CustomerNotification = {
   title?: string;

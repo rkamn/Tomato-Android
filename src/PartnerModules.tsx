@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { apiRequest } from './api';
+import { formatDigipin, isValidDigipin, normalizeDigipin } from './digipin';
 import type { Session } from './types';
 
 type PartnerRole = 'restaurant' | 'shop';
@@ -218,6 +219,11 @@ export default function PartnerModules({
   }
 
   async function saveProfile() {
+    const cleanDigipin = normalizeDigipin(profile.digipin);
+    if (cleanDigipin && !isValidDigipin(cleanDigipin)) {
+      setError('Enter a valid DIGIPIN (e.g. 10 alphanumeric characters).');
+      return;
+    }
     await runAction('profile', async () => {
       await apiRequest(`${apiBase}/profile`, session.token, {
         method: 'PUT',
@@ -227,7 +233,7 @@ export default function PartnerModules({
           ...(partnerRole === 'shop'
             ? { shopAddress: profile.shopAddress?.trim(), category: profile.category?.trim() }
             : { restaurantAddress: profile.restaurantAddress?.trim(), cuisine: profile.cuisine?.trim() }),
-          digipin: profile.digipin?.trim(),
+          digipin: cleanDigipin,
           gsnNumber: profile.gsnNumber?.trim(),
         }),
       });
@@ -510,7 +516,10 @@ export default function PartnerModules({
                 <TextInput style={styles.input} placeholder="Phone" keyboardType="phone-pad" value={profile.phone || ''} onChangeText={(value) => setProfile((current) => ({ ...current, phone: value }))} />
                 <TextInput style={styles.input} placeholder={partnerRole === 'shop' ? 'Shop address' : 'Restaurant address'} value={(partnerRole === 'shop' ? profile.shopAddress : profile.restaurantAddress) || ''} onChangeText={(value) => setProfile((current) => partnerRole === 'shop' ? ({ ...current, shopAddress: value }) : ({ ...current, restaurantAddress: value }))} />
                 <TextInput style={styles.input} placeholder={partnerRole === 'shop' ? 'Category' : 'Cuisine'} value={(partnerRole === 'shop' ? profile.category : profile.cuisine) || ''} onChangeText={(value) => setProfile((current) => partnerRole === 'shop' ? ({ ...current, category: value }) : ({ ...current, cuisine: value }))} />
-                <TextInput style={styles.input} placeholder="DIGIPIN" autoCapitalize="characters" value={profile.digipin || ''} onChangeText={(value) => setProfile((current) => ({ ...current, digipin: value }))} />
+                <TextInput style={styles.input} placeholder="Pickup DIGIPIN (e.g. 4M8-9K2-X1P9)" autoCapitalize="characters" value={profile.digipin || ''} onChangeText={(value) => setProfile((current) => ({ ...current, digipin: value }))} />
+                {!!profile.digipin && (
+                  <Text style={styles.muted}>National Addressing Grid: {formatDigipin(profile.digipin)}</Text>
+                )}
                 <TextInput style={styles.input} placeholder="GST/GSN number" autoCapitalize="characters" value={profile.gsnNumber || ''} onChangeText={(value) => setProfile((current) => ({ ...current, gsnNumber: value }))} />
                 <Pressable disabled={busy === 'profile'} style={styles.primaryButton} onPress={() => void saveProfile()}>
                   <Text style={styles.primaryText}>{busy === 'profile' ? 'Saving…' : 'Save profile'}</Text>

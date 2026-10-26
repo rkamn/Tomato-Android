@@ -15,6 +15,7 @@ import AdminControlPanel from './AdminControlPanel';
 import AdminOperations from './AdminOperations';
 import type { AdminOperationSection } from './AdminOperations';
 import ProfileAccess from './ProfileAccess';
+import { isOrderReturnAccepted } from './types';
 import type { Order, Session, User } from './types';
 
 type AdminTab = 'dashboard' | 'orders' | 'complaints' | 'accounts' | 'serviceArea' | 'team' | 'controlPanel'
@@ -31,6 +32,8 @@ type Complaint = {
   ticketId?: string;
   userName?: string;
   userRole?: string;
+  userEmail?: string;
+  userPhone?: string;
   subject?: string;
   description?: string;
   category?: string;
@@ -38,6 +41,9 @@ type Complaint = {
   orderRef?: string;
   status?: string;
   adminComment?: string;
+  adminResponse?: string;
+  resolutionNote?: string;
+  updatedAt?: string;
   createdAt?: string;
 };
 type Dashboard = {
@@ -152,6 +158,7 @@ export default function AdminApp({
   const [orders, setOrders] = useState<Order[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [complaintStatus, setComplaintStatus] = useState('all');
+  const [adminDraftComments, setAdminDraftComments] = useState<Record<string, string>>({});
   const [orderPage, setOrderPage] = useState(1);
   const [orderPages, setOrderPages] = useState(1);
   const [orderDateLabel, setOrderDateLabel] = useState('');
@@ -297,6 +304,33 @@ export default function AdminApp({
     ]);
   }
 
+  async function updateComplaint(complaint: Complaint, nextStatus: string) {
+    const draft = (adminDraftComments[complaint._id] ?? '').trim();
+    await runAction(complaint._id, async () => {
+      const payload: { status?: string; adminComment?: string } = {};
+      if (nextStatus) payload.status = nextStatus;
+      if (draft) payload.adminComment = draft;
+
+      const endpointId = encodeURIComponent(complaint.ticketId || complaint._id);
+      await apiRequest(`/api/admin/complaints/${endpointId}`, session.token, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }).catch(async () => {
+        await apiRequest(`/api/support/tickets/${endpointId}`, session.token, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        }).catch(() => null);
+      });
+
+      setAdminDraftComments((current) => {
+        const next = { ...current };
+        delete next[complaint._id];
+        return next;
+      });
+      await loadComplaints();
+    });
+  }
+
   async function moderateAccount(account: AdminUser, action: 'approve' | 'reject' | 'block' | 'unblock') {
     const path = action === 'approve' || action === 'reject'
       ? `/api/admin/users/${account._id}/${action}`
@@ -417,12 +451,12 @@ export default function AdminApp({
   return (
     <View style={styles.root}>
       <View style={styles.header}>
-        <View style={styles.headerText}>
+        <Pressable accessibilityLabel="Go to home screen" onPress={() => setTab('orders')} style={styles.headerText}>
           <Text style={styles.brand}>Tomato Admin</Text>
           <Text style={styles.subtitle}>
             {session.user.adminRoleTitle || label(role)} · {session.user.name || session.user.email || 'Administrator'}
           </Text>
-        </View>
+        </Pressable>
         <ProfileAccess
           session={session}
           roleLabel={session.user.adminRoleTitle || label(role)}
@@ -524,30 +558,123 @@ export default function AdminApp({
                     <Chip key={status} title={status} selected={complaintStatus === status} onPress={() => setComplaintStatus(status)} />
                   ))}
                 </View>
-                {complaints.length ? complaints.map((complaint) => (
-                  <View key={complaint._id} style={styles.card}>
-                    <Text style={styles.cardTitle}>{complaint.ticketId || 'Ticket'} · {complaint.subject || 'Support request'}</Text>
-                    <Text style={styles.muted}>{complaint.userName || 'User'} · {label(complaint.userRole || 'customer')} · {complaint.priority || 'Normal'}</Text>
-                    {!!complaint.orderRef && <Text style={styles.muted}>Order: {complaint.orderRef}</Text>}
-                    <Text style={styles.muted}>{complaint.description || complaint.category || 'No description provided.'}</Text>
-                    <Text style={styles.muted}>Status: {complaint.status || 'Open'}{complaint.adminComment ? ` · Admin: ${complaint.adminComment}` : ''}</Text>
-                    <View style={styles.chips}>
-                      {(['In Review', 'Resolved', 'Closed'] as const)
-                        .filter((status) => status !== complaint.status)
-                        .map((status) => (
-                          <Pressable key={status} style={styles.secondaryButton} onPress={() => void runAction(complaint._id, async () => {
-                            await apiRequest(`/api/admin/complaints/${encodeURIComponent(complaint.ticketId || complaint._id)}`, session.token, {
-                              method: 'PATCH',
-                              body: JSON.stringify({ status }),
-                            });
-                            await loadComplaints();
-                          })}>
-                            <Text style={styles.secondaryButtonText}>{status}</Text>
+                {complaints.length ? complaints.map((complaint) => {
+                  const normalizedStatus = (complaint.status || 'Open').toLowerCase();
+                  const isClosed = ['resolved', 'closed'].includes(normalizedStatus);
+                  const isBusy = busyId === complaint._id;
+                  const draftComment = adminDraftComments[complaint._id] ?? '';
+                  const hasAdminNote = Boolean(complaint.adminComment || complaint.adminResponse || complaint.resolutionNote);
+
+                  return (
+                    <View key={complaint._id} style={styles.card}>
+                      <View style={styles.rowBetween}>
+                        <Text style={[styles.cardTitle, { flex: 1, marginRight: 8 }]}>
+                          {complaint.ticketId || 'Ticket'} · {complaint.subject || 'Support request'}
+                        </Text>
+                        <View style={[
+                          styles.ticketBadge,
+                          normalizedStatus === 'open' && styles.ticketBadgeOpen,
+                          normalizedStatus === 'in review' && styles.ticketBadgeReview,
+                          normalizedStatus === 'resolved' && styles.ticketBadgeResolved,
+                          normalizedStatus === 'closed' && styles.ticketBadgeClosed,
+                        ]}>
+                          <Text style={[
+                            styles.ticketBadgeText,
+                            normalizedStatus === 'open' && styles.ticketBadgeTextOpen,
+                            normalizedStatus === 'in review' && styles.ticketBadgeTextReview,
+                            normalizedStatus === 'resolved' && styles.ticketBadgeTextResolved,
+                            normalizedStatus === 'closed' && styles.ticketBadgeTextClosed,
+                          ]}>
+                            {complaint.status || 'Open'}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <Text style={styles.muted}>
+                        {complaint.userName || 'Customer'} · {label(complaint.userRole || 'customer')} · Priority: {complaint.priority || 'Normal'}
+                        {complaint.createdAt ? ` · ${new Date(complaint.createdAt).toLocaleDateString()}` : ''}
+                      </Text>
+
+                      {!!complaint.orderRef && (
+                        <Text style={[styles.muted, { fontWeight: '700' }]}>Order: {complaint.orderRef}</Text>
+                      )}
+
+                      <Text style={[styles.muted, { color: '#302923', marginTop: 4, marginBottom: 6 }]}>
+                        {complaint.description || complaint.category || 'No description provided.'}
+                      </Text>
+
+                      {hasAdminNote && (
+                        <View style={styles.adminExistingUpdateBox}>
+                          <Text style={styles.adminExistingUpdateTitle}>Previous Admin / Support Note:</Text>
+                          <Text style={styles.adminExistingUpdateText}>
+                            {complaint.adminComment || complaint.adminResponse || complaint.resolutionNote}
+                          </Text>
+                        </View>
+                      )}
+
+                      <TextInput
+                        placeholder="Write update or resolution comment for customer..."
+                        placeholderTextColor="#9ca3af"
+                        value={draftComment}
+                        onChangeText={(text) => setAdminDraftComments((prev) => ({ ...prev, [complaint._id]: text }))}
+                        style={[styles.input, { minHeight: 40, marginTop: 6, marginBottom: 6 }]}
+                        multiline
+                      />
+
+                      <View style={styles.chips}>
+                        {draftComment.trim().length > 0 && (
+                          <Pressable
+                            disabled={isBusy}
+                            style={[styles.primaryButton, { minHeight: 34, paddingVertical: 6, paddingHorizontal: 12, backgroundColor: '#2563eb' }]}
+                            onPress={() => void updateComplaint(complaint, complaint.status || 'In Review')}
+                          >
+                            <Text style={styles.primaryButtonText}>Send Update</Text>
                           </Pressable>
-                        ))}
+                        )}
+
+                        {normalizedStatus !== 'in review' && !isClosed && (
+                          <Pressable
+                            disabled={isBusy}
+                            style={[styles.secondaryButton, { minHeight: 34, paddingVertical: 6, paddingHorizontal: 12 }]}
+                            onPress={() => void updateComplaint(complaint, 'In Review')}
+                          >
+                            <Text style={styles.secondaryButtonText}>Mark In Review</Text>
+                          </Pressable>
+                        )}
+
+                        {normalizedStatus !== 'resolved' && (
+                          <Pressable
+                            disabled={isBusy}
+                            style={[styles.primaryButton, { minHeight: 34, paddingVertical: 6, paddingHorizontal: 12, backgroundColor: '#166534' }]}
+                            onPress={() => void updateComplaint(complaint, 'Resolved')}
+                          >
+                            <Text style={styles.primaryButtonText}>Resolve</Text>
+                          </Pressable>
+                        )}
+
+                        {normalizedStatus !== 'closed' && (
+                          <Pressable
+                            disabled={isBusy}
+                            style={[styles.secondaryButton, { minHeight: 34, paddingVertical: 6, paddingHorizontal: 12, backgroundColor: '#f3f4f6' }]}
+                            onPress={() => void updateComplaint(complaint, 'Closed')}
+                          >
+                            <Text style={[styles.secondaryButtonText, { color: '#374151' }]}>Close</Text>
+                          </Pressable>
+                        )}
+
+                        {isClosed && (
+                          <Pressable
+                            disabled={isBusy}
+                            style={[styles.secondaryButton, { minHeight: 34, paddingVertical: 6, paddingHorizontal: 12 }]}
+                            onPress={() => void updateComplaint(complaint, 'Open')}
+                          >
+                            <Text style={styles.secondaryButtonText}>Reopen</Text>
+                          </Pressable>
+                        )}
+                      </View>
                     </View>
-                  </View>
-                )) : <Text style={styles.muted}>No complaints in this status.</Text>}
+                  );
+                }) : <Text style={styles.muted}>No complaints in this status.</Text>}
               </View>
             )}
             {tab === 'orders' && (
@@ -604,44 +731,113 @@ export default function AdminApp({
                     </Pressable>
                   </View>
                 )}
-                {orders.length ? orders.map((order) => (
-                  <OrderCard
-                    key={order._id}
-                    order={order}
-                    action={(
-                      <View style={styles.row}>
-                        <Pressable
-                          style={styles.secondaryButton}
-                          onPress={() => setSelectedOrderIds((selected) =>
-                            selected.includes(order._id)
-                              ? selected.filter((id) => id !== order._id)
-                              : [...selected, order._id],
+                {orders.length ? orders.map((order) => {
+                  const normalizedStatus = (order.status || '').toLowerCase();
+                  const isCancelled = normalizedStatus === 'cancelled';
+                  const returnAccepted = isOrderReturnAccepted(order);
+                  const isCancellableByAdmin = !['delivered', 'cancelled', 'returned'].includes(normalizedStatus);
+                  return (
+                    <OrderCard
+                      key={order._id}
+                      order={order}
+                      action={(
+                        <View style={styles.row}>
+                          <Pressable
+                            style={styles.secondaryButton}
+                            onPress={() => setSelectedOrderIds((selected) =>
+                              selected.includes(order._id)
+                                ? selected.filter((id) => id !== order._id)
+                                : [...selected, order._id],
+                            )}
+                          >
+                            <Text style={styles.secondaryButtonText}>{selectedOrderIds.includes(order._id) ? 'Selected' : 'Select'}</Text>
+                          </Pressable>
+                          {isCancellableByAdmin && (
+                            <Pressable
+                              disabled={busyId === order._id}
+                              style={[styles.dangerButton, busyId === order._id && styles.disabled]}
+                              onPress={() => confirmAction(
+                                'Cancel this order?',
+                                'As an Administrator, you can cancel this order. The customer and partner will be notified, and tracking will transition to return-to-source mode.',
+                                'Cancel Order',
+                                async () => {
+                                  setBusyId(order._id);
+                                  try {
+                                    await apiRequest(`/api/admin/orders/${order._id}/status`, session.token, {
+                                      method: 'PUT',
+                                      body: JSON.stringify({ status: 'cancelled' }),
+                                    }).catch(async () => {
+                                      await apiRequest(`/api/admin/orders/${order._id}/cancel`, session.token, {
+                                        method: 'POST',
+                                      }).catch(() => null);
+                                    });
+                                    await loadOrders();
+                                  } finally {
+                                    setBusyId('');
+                                  }
+                                },
+                              )}
+                            >
+                              <Text style={styles.dangerButtonText}>Cancel</Text>
+                            </Pressable>
                           )}
-                        >
-                          <Text style={styles.secondaryButtonText}>{selectedOrderIds.includes(order._id) ? 'Selected' : 'Select'}</Text>
-                        </Pressable>
-                        <Pressable
-                          disabled={busyId === order._id}
-                          style={styles.secondaryButton}
-                          onPress={() => confirmAction(
-                            order.isArchived ? 'Restore this order?' : 'Archive this order?',
-                            'This changes the order archive state on the platform.',
-                            order.isArchived ? 'Restore' : 'Archive',
-                            async () => {
-                              await apiRequest(`/api/admin/orders/${order._id}/archive`, session.token, {
-                                method: 'PUT',
-                                body: JSON.stringify({ isArchived: !order.isArchived }),
-                              });
-                              await loadOrders();
-                            },
+                          {isCancelled && !returnAccepted && (
+                            <Pressable
+                              disabled={busyId === order._id}
+                              style={[styles.primaryButton, { backgroundColor: '#166534', minHeight: 38, paddingVertical: 8 }]}
+                              onPress={() => confirmAction(
+                                'Accept returned order?',
+                                'Confirm that the returned goods have been received and accepted by the source (Admin). This will conclude live tracking.',
+                                'Accept Return',
+                                async () => {
+                                  setBusyId(order._id);
+                                  try {
+                                    await apiRequest(`/api/admin/orders/${order._id}/status`, session.token, {
+                                      method: 'PUT',
+                                      body: JSON.stringify({
+                                        status: 'returned',
+                                        returnStatus: 'accepted',
+                                        returnAccepted: true,
+                                        returnAcceptedBy: 'admin',
+                                      }),
+                                    }).catch(async () => {
+                                      await apiRequest(`/api/admin/orders/${order._id}/return-accept`, session.token, {
+                                        method: 'POST',
+                                      }).catch(() => null);
+                                    });
+                                    await loadOrders();
+                                  } finally {
+                                    setBusyId('');
+                                  }
+                                },
+                              )}
+                            >
+                              <Text style={styles.primaryButtonText}>Accept Return</Text>
+                            </Pressable>
                           )}
-                        >
-                          <Text style={styles.secondaryButtonText}>{order.isArchived ? 'Restore' : 'Archive'}</Text>
-                        </Pressable>
-                      </View>
-                    )}
-                  />
-                )) : <Text style={styles.muted}>No orders on this date.</Text>}
+                          <Pressable
+                            disabled={busyId === order._id}
+                            style={styles.secondaryButton}
+                            onPress={() => confirmAction(
+                              order.isArchived ? 'Restore this order?' : 'Archive this order?',
+                              'This changes the order archive state on the platform.',
+                              order.isArchived ? 'Restore' : 'Archive',
+                              async () => {
+                                await apiRequest(`/api/admin/orders/${order._id}/archive`, session.token, {
+                                  method: 'PUT',
+                                  body: JSON.stringify({ isArchived: !order.isArchived }),
+                                });
+                                await loadOrders();
+                              },
+                            )}
+                          >
+                            <Text style={styles.secondaryButtonText}>{order.isArchived ? 'Restore' : 'Archive'}</Text>
+                          </Pressable>
+                        </View>
+                      )}
+                    />
+                  );
+                }) : <Text style={styles.muted}>No orders on this date.</Text>}
                 <View style={styles.row}>
                   <Pressable disabled={orderPage <= 1} style={[styles.secondaryButton, orderPage <= 1 && styles.disabled]} onPress={() => setOrderPage((page) => Math.max(1, page - 1))}>
                     <Text style={styles.secondaryButtonText}>Previous day</Text>
@@ -878,11 +1074,22 @@ function Chip({ title, selected, onPress }: { title: string; selected: boolean; 
 }
 
 function OrderCard({ order, action }: { order: Order; action?: React.ReactNode }) {
+  const isCancelled = (order.status || '').toLowerCase() === 'cancelled';
+  const returnAccepted = isOrderReturnAccepted(order);
+  const itemNames = order.items?.map((item) => `${item.name}(${item.quantity || 1})`).join(', ');
   return (
     <View style={styles.card}>
       <Text style={styles.cardTitle}>#{order.orderNumber || order._id.slice(-6).toUpperCase()} · {label(order.status || 'unknown')}</Text>
       <Text style={styles.muted}>{order.customerName || 'Customer'} · {order.customerPhone || 'No phone'}</Text>
       <Text style={styles.muted}>{order.restaurantName || order.shopName || 'Store'} · {money(order.totalAmount)}</Text>
+      {!!itemNames && <Text style={[styles.muted, { fontWeight: '600' }]}>{itemNames}</Text>}
+      {isCancelled && (
+        <Text style={{ fontSize: 12, fontWeight: '700', color: returnAccepted ? '#166534' : '#c2410c', marginTop: 2, marginBottom: 4 }}>
+          {returnAccepted
+            ? `✅ Return accepted by ${order.returnAcceptedBy || 'source'}. Tracking ended.`
+            : '📦 Cancelled · Return in transit to source (tracking active)'}
+        </Text>
+      )}
       {!!action && <View style={styles.actionRow}>{action}</View>}
     </View>
   );
@@ -930,4 +1137,18 @@ const styles = StyleSheet.create({
   error: { color: '#a9241c', backgroundColor: '#fae7e4', padding: 12, borderRadius: 10, marginBottom: 10 },
   fieldLabel: { color: '#463e39', fontSize: 13, fontWeight: '700', marginTop: 8 },
   actionRow: { alignItems: 'flex-start', marginTop: 5 },
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  ticketBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
+  ticketBadgeOpen: { backgroundColor: '#fef3c7', borderColor: '#fde68a' },
+  ticketBadgeReview: { backgroundColor: '#dbeafe', borderColor: '#bfdbfe' },
+  ticketBadgeResolved: { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' },
+  ticketBadgeClosed: { backgroundColor: '#f3f4f6', borderColor: '#e5e7eb' },
+  ticketBadgeText: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase' },
+  ticketBadgeTextOpen: { color: '#92400e' },
+  ticketBadgeTextReview: { color: '#1e40af' },
+  ticketBadgeTextResolved: { color: '#166534' },
+  ticketBadgeTextClosed: { color: '#4b5563' },
+  adminExistingUpdateBox: { backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 8, padding: 9, marginVertical: 6 },
+  adminExistingUpdateTitle: { color: '#15803d', fontSize: 11, fontWeight: '800', marginBottom: 2 },
+  adminExistingUpdateText: { color: '#14532d', fontSize: 12, lineHeight: 17 },
 });

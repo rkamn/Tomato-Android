@@ -26,14 +26,10 @@ export function isValidDigipin(value?: unknown): boolean {
   const str = typeof value === 'string' ? value : typeof value === 'number' ? String(value) : '';
   if (!str) return false;
   const cleaned = normalizeDigipin(str);
-  if (cleaned.length !== 10) {
-    return cleaned.length >= 6 && cleaned.length <= 14;
+  if (cleaned.length < 6 || cleaned.length > 14) {
+    return false;
   }
-  const validChars = new Set(['F', 'C', '9', '8', 'J', '3', '2', '7', 'K', '4', '5', '6', 'L', 'M', 'P', 'T']);
-  for (const ch of cleaned) {
-    if (!validChars.has(ch)) return false;
-  }
-  return true;
+  return /^[A-Z0-9]+$/.test(cleaned);
 }
 
 export function formatDigipin(value?: unknown): string {
@@ -53,6 +49,9 @@ export function formatDigipin(value?: unknown): string {
  * Encodes latitude & longitude into official India Post 10-character DIGIPIN code.
  */
 export function encodeDigipin(lat: number, lon: number): string {
+  if (typeof lat !== 'number' || typeof lon !== 'number' || isNaN(lat) || isNaN(lon)) {
+    return '';
+  }
   let minLat = DIGIPIN_BOUNDS.minLat;
   let maxLat = DIGIPIN_BOUNDS.maxLat;
   let minLon = DIGIPIN_BOUNDS.minLon;
@@ -66,9 +65,9 @@ export function encodeDigipin(lat: number, lon: number): string {
     let rowIndex = Math.floor((maxLat - lat) / latSpan);
     let colIndex = Math.floor((lon - minLon) / lonSpan);
 
-    if (rowIndex < 0) rowIndex = 0;
+    if (isNaN(rowIndex) || rowIndex < 0) rowIndex = 0;
     if (rowIndex > 3) rowIndex = 3;
-    if (colIndex < 0) colIndex = 0;
+    if (isNaN(colIndex) || colIndex < 0) colIndex = 0;
     if (colIndex > 3) colIndex = 3;
 
     digipin += DIGIPIN_GRID[rowIndex][colIndex];
@@ -110,7 +109,53 @@ export async function openMapplsMap(digipin?: string): Promise<void> {
   try {
     await Linking.openURL('https://digipin.org.in');
   } catch {
-    await Linking.openURL('https://www.mappls.com');
+    try {
+      await Linking.openURL('https://www.mappls.com');
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Navigates to a delivery destination prioritizing DIGIPIN, and falling back to GPS coordinates.
+ */
+export async function openNavigationTarget({
+  digipin,
+  lat,
+  lng,
+  address,
+}: {
+  digipin?: string;
+  lat?: number;
+  lng?: number;
+  address?: string;
+}): Promise<void> {
+  const cleanDigipin = normalizeDigipin(digipin);
+  if (cleanDigipin && isValidDigipin(cleanDigipin)) {
+    // 1st Priority: Customer / Partner DIGIPIN via Mappls
+    await openMapplsMap(cleanDigipin);
+    return;
+  }
+
+  if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
+    // 2nd Priority: GPS Coordinates set/shared by customer
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+    try {
+      await Linking.openURL(url);
+      return;
+    } catch {
+      // fallback
+    }
+  }
+
+  if (address?.trim()) {
+    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address.trim())}`;
+    try {
+      await Linking.openURL(url);
+    } catch {
+      // ignore
+    }
   }
 }
 

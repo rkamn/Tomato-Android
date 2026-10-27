@@ -3,6 +3,16 @@ export type User = {
   id?: string;
   customerId?: string;
   customer_id?: string;
+  restaurantId?: string;
+  restaurant_id?: string;
+  shopId?: string;
+  shop_id?: string;
+  storeId?: string;
+  store_id?: string;
+  riderId?: string;
+  rider_id?: string;
+  adminId?: string;
+  admin_id?: string;
   name?: string;
   displayName?: string;
   email?: string;
@@ -57,6 +67,116 @@ export function getCustomerId(user?: User | null): string {
   return idStr || _idStr || (typeof user.email === 'string' ? user.email : '') || 'cust-1001';
 }
 
+export function derive4DigitCode(rawId?: unknown, fallback = 7067): string {
+  if (!rawId) return String(fallback);
+  const str = String(rawId).trim();
+  if (!str) return String(fallback);
+  const digits = str.replace(/\D/g, '');
+  if (digits.length >= 4) {
+    return digits.slice(-4);
+  }
+  if (digits.length > 0) {
+    return digits.padStart(4, '0');
+  }
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 31 + str.charCodeAt(i)) % 9000;
+  }
+  return String(1000 + Math.abs(hash));
+}
+
+export function getAccountDisplayId(user?: User | null, defaultRole?: string): string {
+  if (!user) {
+    const fallbackRole = (defaultRole || '').toLowerCase();
+    if (fallbackRole.includes('restaurant')) return 'rest-7067';
+    if (fallbackRole.includes('shop')) return 'shop-7067';
+    if (fallbackRole.includes('rider') || fallbackRole.includes('delivery')) return 'rider-7067';
+    return 'cust-1001';
+  }
+
+  const role = (user.role || user.baseRole || defaultRole || '').toLowerCase();
+
+  if (role.includes('restaurant')) {
+    const explicit = user.restaurantId || user.restaurant_id || user.storeId || user.store_id;
+    if (explicit && typeof explicit === 'string') {
+      const trimmed = explicit.trim();
+      if (/^rest-\d+$/i.test(trimmed)) return trimmed.toLowerCase();
+      if (/^\d+$/.test(trimmed)) return `rest-${trimmed}`;
+      return `rest-${derive4DigitCode(trimmed, 7067)}`;
+    }
+    const idVal = user.id || user._id;
+    if (idVal && typeof idVal === 'string') {
+      const trimmed = idVal.trim();
+      if (/^rest-\d+$/i.test(trimmed)) return trimmed.toLowerCase();
+      return `rest-${derive4DigitCode(trimmed, 7067)}`;
+    }
+    return 'rest-7067';
+  }
+
+  if (role.includes('shop')) {
+    const explicit = user.shopId || user.shop_id || user.storeId || user.store_id;
+    if (explicit && typeof explicit === 'string') {
+      const trimmed = explicit.trim();
+      if (/^shop-\d+$/i.test(trimmed)) return trimmed.toLowerCase();
+      if (/^\d+$/.test(trimmed)) return `shop-${trimmed}`;
+      return `shop-${derive4DigitCode(trimmed, 7067)}`;
+    }
+    const idVal = user.id || user._id;
+    if (idVal && typeof idVal === 'string') {
+      const trimmed = idVal.trim();
+      if (/^shop-\d+$/i.test(trimmed)) return trimmed.toLowerCase();
+      return `shop-${derive4DigitCode(trimmed, 7067)}`;
+    }
+    return 'shop-7067';
+  }
+
+  if (role.includes('rider') || role.includes('delivery')) {
+    const explicit = user.riderId || user.rider_id;
+    if (explicit && typeof explicit === 'string') {
+      const trimmed = explicit.trim();
+      if (/^rider-\d+$/i.test(trimmed)) return trimmed.toLowerCase();
+      if (/^\d+$/.test(trimmed)) return `rider-${trimmed}`;
+      return `rider-${derive4DigitCode(trimmed, 7067)}`;
+    }
+    const idVal = user.id || user._id;
+    if (idVal && typeof idVal === 'string') {
+      const trimmed = idVal.trim();
+      if (/^rider-\d+$/i.test(trimmed)) return trimmed.toLowerCase();
+      return `rider-${derive4DigitCode(trimmed, 7067)}`;
+    }
+    return 'rider-7067';
+  }
+
+  if (isAdminUser(user)) {
+    const explicit = user.adminId || user.admin_id;
+    if (explicit && typeof explicit === 'string') {
+      const trimmed = explicit.trim();
+      if (/^admin-\d+$/i.test(trimmed)) return trimmed.toLowerCase();
+      if (/^\d+$/.test(trimmed)) return `admin-${trimmed}`;
+      return `admin-${derive4DigitCode(trimmed, 1001)}`;
+    }
+    const idVal = user.id || user._id;
+    if (idVal && typeof idVal === 'string') {
+      const trimmed = idVal.trim();
+      if (/^admin-\d+$/i.test(trimmed)) return trimmed.toLowerCase();
+      return `admin-${derive4DigitCode(trimmed, 1001)}`;
+    }
+    return 'admin-1001';
+  }
+
+  // Customer or default
+  return getCustomerId(user);
+}
+
+export function getAccountIdLabel(user?: User | null, defaultRole?: string): string {
+  const role = (user?.role || user?.baseRole || defaultRole || '').toLowerCase();
+  if (role.includes('restaurant')) return 'Restaurant ID';
+  if (role.includes('shop')) return 'Shop ID';
+  if (role.includes('rider') || role.includes('delivery')) return 'Rider ID';
+  if (isAdminUser(user || {})) return 'Admin ID';
+  return 'Customer ID';
+}
+
 export type Session = {
   token: string;
   user: User;
@@ -83,6 +203,12 @@ export type Store = {
   isOnline?: boolean;
 };
 
+export type ItemVariant = {
+  id: string;
+  name: string;
+  price: number;
+};
+
 export type MenuItem = {
   _id: string;
   name: string;
@@ -99,7 +225,44 @@ export type MenuItem = {
   reviewCount?: number;
   isShopItem?: boolean;
   storeType?: 'restaurant' | 'shop';
+  variants?: ItemVariant[];
+  selectedVariant?: ItemVariant;
 };
+
+export function getItemVariants(item?: MenuItem | null): ItemVariant[] {
+  if (!item) return [];
+  const rawVariants = (item as unknown as { variants?: Array<{ id?: string; name?: string; label?: string; price?: number }> }).variants;
+  if (Array.isArray(rawVariants) && rawVariants.length > 0) {
+    return rawVariants.map((v, i) => ({
+      id: v.id || `${item._id}-v-${i}`,
+      name: v.name || v.label || `Variant ${i + 1}`,
+      price: typeof v.price === 'number' ? v.price : Number(item.price) || 0,
+    }));
+  }
+
+  const basePrice = Math.max(0, Number(item.price) || 0);
+  const cat = (item.category || '').toLowerCase();
+
+  if (cat.includes('beverage') || cat.includes('drink') || cat.includes('shake') || cat.includes('coffee') || cat.includes('tea') || cat.includes('juice')) {
+    return [
+      { id: 'regular', name: 'Regular', price: Math.round(basePrice) },
+      { id: 'large', name: 'Large', price: Math.round(basePrice * 1.35) },
+    ];
+  }
+
+  if (item.isShopItem || cat.includes('grocery') || cat.includes('dairy') || cat.includes('staple') || cat.includes('produce')) {
+    return [
+      { id: '500g', name: '500g', price: Math.round(basePrice) },
+      { id: '1kg', name: '1 kg', price: Math.round(basePrice * 1.85) },
+    ];
+  }
+
+  const halfPrice = Math.max(20, Math.round((basePrice * 0.6) / 5) * 5);
+  return [
+    { id: 'half', name: 'Half', price: halfPrice },
+    { id: 'full', name: 'Full', price: basePrice },
+  ];
+}
 
 export type Address = {
   _id: string;
@@ -112,8 +275,10 @@ export type Address = {
   postalCode: string;
   phone?: string;
   digipin?: string;
+  coordinates?: number[];
   isDefault?: boolean;
   location?: {
+    type?: string;
     coordinates?: number[];
   };
 };
@@ -135,6 +300,10 @@ export type Order = {
   status?: string;
   paymentMethod?: string;
   paymentStatus?: string;
+  paymentTransactionId?: string;
+  razorpayPaymentId?: string;
+  razorpayOrderId?: string;
+  razorpaySignature?: string;
   totalAmount?: number;
   restaurantId?: string;
   restaurantName?: string;
@@ -160,10 +329,17 @@ export type Order = {
     label?: string;
     line1?: string;
     line2?: string;
+    locality?: string;
     city?: string;
+    state?: string;
     postalCode?: string;
     phone?: string;
     digipin?: string;
+    coordinates?: number[];
+    location?: {
+      type?: string;
+      coordinates?: number[];
+    };
   };
   returnStatus?: 'pending' | 'in_transit' | 'returned' | 'accepted' | string;
   returnAccepted?: boolean;

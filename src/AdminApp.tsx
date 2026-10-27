@@ -14,6 +14,8 @@ import { apiRequest } from './api';
 import AdminControlPanel from './AdminControlPanel';
 import AdminOperations from './AdminOperations';
 import type { AdminOperationSection } from './AdminOperations';
+import { formatDigipin } from './digipin';
+import GlobalHeader from './GlobalHeader';
 import ProfileAccess from './ProfileAccess';
 import { isOrderReturnAccepted } from './types';
 import type { Order, Session, User } from './types';
@@ -448,36 +450,41 @@ export default function AdminApp({
       && !['admin', 'superadmin'].includes(staffRole.roleKey),
   );
 
+  const activeSearch = tab === 'accounts' ? accountSearch : orderSearch;
+  const handleSearchChange = (text: string) => {
+    if (tab === 'accounts') {
+      setAccountSearch(text);
+    } else {
+      setOrderSearch(text);
+      if (tab !== 'orders') setTab('orders');
+    }
+  };
+
   return (
     <View style={styles.root}>
-      <View style={styles.header}>
-        <Pressable accessibilityLabel="Go to home screen" onPress={() => setTab('orders')} style={styles.headerText}>
-          <Text style={styles.brand}>Tomato Admin</Text>
-          <Text style={styles.subtitle}>
-            {session.user.adminRoleTitle || label(role)} · {session.user.name || session.user.email || 'Administrator'}
-          </Text>
-        </Pressable>
-        <ProfileAccess
-          session={session}
-          roleLabel={session.user.adminRoleTitle || label(role)}
-          items={tabs.map((item) => ({
-            key: item,
-            label: tabLabels[item],
-            description: item === 'controlPanel'
-              ? 'Staff, permissions and platform controls'
-              : `Open ${tabLabels[item].toLowerCase()} workspace`,
-            icon: item === 'orders' ? '▤' : item === 'complaints' ? '？' : item === 'team' ? '♙' : '◦',
-          }))}
-          onNavigate={(key) => setTab(key as AdminTab)}
-          onSignOut={() => {
-            Alert.alert('Sign out?', 'You can sign back in any time.', [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Sign out', style: 'destructive', onPress: () => void onSignOut() },
-            ]);
-          }}
-          onSessionUserUpdate={onSessionUserUpdate}
-        />
-      </View>
+      <GlobalHeader
+        session={session}
+        onBrandPress={() => setTab('dashboard')}
+        searchQuery={activeSearch}
+        onSearchChange={handleSearchChange}
+        searchPlaceholder={tab === 'accounts' ? 'Search accounts, emails, roles…' : 'Search orders, customers, stores…'}
+        city={session.user.city || 'New Delhi'}
+        pincode={pincodes[0] || session.user.pincode || '110001'}
+        onNotificationPress={() => setTab('complaints')}
+        hasUnreadNotifications={complaints.some((c) => (c.status || '').toLowerCase() === 'open')}
+        roleLabel={session.user.adminRoleTitle || label(role)}
+        profileMenuItems={tabs.map((item) => ({
+          key: item,
+          label: tabLabels[item],
+          description: item === 'controlPanel'
+            ? 'Staff, permissions and platform controls'
+            : `Open ${tabLabels[item].toLowerCase()} workspace`,
+          icon: item === 'orders' ? '▤' : item === 'complaints' ? '？' : item === 'team' ? '♙' : '◦',
+        }))}
+        onNavigateProfile={(key) => setTab(key as AdminTab)}
+        onSignOut={() => void onSignOut()}
+        onSessionUserUpdate={onSessionUserUpdate}
+      />
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -885,6 +892,11 @@ export default function AdminApp({
                     <Text style={styles.muted}>
                       {label(account.role)} · {account.isApproved === false ? 'Pending approval' : 'Approved'} · {account.isBlocked ? 'Blocked' : 'Active'}
                     </Text>
+                    {Boolean((account as any).digipin) && (
+                      <Text style={[styles.muted, { color: '#0969da', fontWeight: '600' }]}>
+                        ⌖ DIGIPIN: {formatDigipin((account as any).digipin)}
+                      </Text>
+                    )}
                     <View style={styles.chips}>
                       {account.isApproved === false && (
                         <>
@@ -990,6 +1002,11 @@ export default function AdminApp({
                     <Text style={styles.cardTitle}>{member.name || 'Staff member'} · {member.adminRoleTitle || label(member.role)}</Text>
                     <Text style={styles.muted}>{member.email || member.phone || member._id}</Text>
                     <Text style={styles.muted}>Role: {label(member.role)} · {member.isBlocked ? 'Blocked' : 'Active'}</Text>
+                    {Boolean((member as any).digipin) && (
+                      <Text style={[styles.muted, { color: '#0969da', fontWeight: '600' }]}>
+                        ⌖ DIGIPIN: {formatDigipin((member as any).digipin)}
+                      </Text>
+                    )}
                     <Text style={styles.muted}>Permissions: {(member.permissions || []).join(', ') || 'None'}</Text>
                     {isPlatformAdmin
                       && !['admin', 'superadmin'].includes(member.role)
@@ -1077,11 +1094,30 @@ function OrderCard({ order, action }: { order: Order; action?: React.ReactNode }
   const isCancelled = (order.status || '').toLowerCase() === 'cancelled';
   const returnAccepted = isOrderReturnAccepted(order);
   const itemNames = order.items?.map((item) => `${item.name}(${item.quantity || 1})`).join(', ');
+  const pickupDigipin = order.pickupDigipin || order.restaurantDigipin || order.shopDigipin;
+  const customerDigipin = order.deliveryAddress?.digipin;
+  const customerCoords = order.deliveryAddress?.coordinates
+    || (order.deliveryAddress as unknown as { location?: { coordinates?: number[] } })?.location?.coordinates;
+
   return (
     <View style={styles.card}>
       <Text style={styles.cardTitle}>#{order.orderNumber || order._id.slice(-6).toUpperCase()} · {label(order.status || 'unknown')}</Text>
       <Text style={styles.muted}>{order.customerName || 'Customer'} · {order.customerPhone || 'No phone'}</Text>
       <Text style={styles.muted}>{order.restaurantName || order.shopName || 'Store'} · {money(order.totalAmount)}</Text>
+      {!!pickupDigipin && (
+        <Text style={[styles.muted, { color: '#0969da', fontWeight: '600' }]}>
+          ⌖ Store Pickup DIGIPIN: {formatDigipin(pickupDigipin)}
+        </Text>
+      )}
+      {customerDigipin ? (
+        <Text style={[styles.muted, { color: '#0969da', fontWeight: '600' }]}>
+          ⌖ Customer Drop DIGIPIN: {formatDigipin(customerDigipin)}
+        </Text>
+      ) : customerCoords && customerCoords.length === 2 ? (
+        <Text style={[styles.muted, { color: '#166534', fontWeight: '600' }]}>
+          📍 Customer Drop GPS: {customerCoords[1].toFixed(5)}, {customerCoords[0].toFixed(5)}
+        </Text>
+      ) : null}
       {!!itemNames && <Text style={[styles.muted, { fontWeight: '600' }]}>{itemNames}</Text>}
       {isCancelled && (
         <Text style={{ fontSize: 12, fontWeight: '700', color: returnAccepted ? '#166534' : '#c2410c', marginTop: 2, marginBottom: 4 }}>

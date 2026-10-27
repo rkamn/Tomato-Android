@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -20,14 +20,19 @@ import {
   View,
 } from 'react-native';
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
+import * as Location from 'expo-location';
 import { apiPath, apiRequest } from './api';
 import { formatDigipin, isValidDigipin, normalizeDigipin, openMapplsMap } from './digipin';
-import ProfileAccess, { ProfileSettingsModal, SupportModal } from './ProfileAccess';
+import GlobalHeader from './GlobalHeader';
+import PaymentModal from './PaymentModal';
+import type { PaymentSuccessDetails } from './PaymentModal';
+import ProfileAccess from './ProfileAccess';
 import type { ProfileMenuItem } from './ProfileAccess';
-import { getCustomerId, isOrderReturnAccepted, isOrderTrackingActive } from './types';
+import { getCustomerId, getItemVariants, isOrderReturnAccepted, isOrderTrackingActive } from './types';
 import type {
   Address,
   CustomerNotification,
+  ItemVariant,
   MenuItem,
   Order,
   Session,
@@ -52,7 +57,7 @@ type CouponValidation = {
   appliedCoupons?: { code: string; title?: string; discountAmount?: number }[];
   rejectedCoupons?: { code: string; reason: string }[];
 };
-type PaymentMethod = 'cod' | 'upi' | 'card' | 'netbanking';
+type PaymentMethod = 'razorpay' | 'cod' | 'upi' | 'card' | 'netbanking';
 
 const PAYMENT_MODES: {
   id: PaymentMethod;
@@ -62,15 +67,16 @@ const PAYMENT_MODES: {
   badge?: string;
 }[] = [
   {
-    id: 'cod',
-    name: 'Cash on delivery (COD)',
-    icon: '💵',
-    description: 'Pay cash or scan rider UPI QR code upon delivery',
+    id: 'razorpay',
+    name: 'Razorpay (Cards, UPI, NetBanking)',
+    icon: '⚡',
+    description: 'Secured by Razorpay · Pay via UPI, Cards, or Net Banking',
+    badge: 'RECOMMENDED',
   },
   {
     id: 'upi',
     name: 'UPI (GPay, PhonePe, Paytm)',
-    icon: '⚡',
+    icon: '📱',
     description: 'Instant zero-fee payment with any UPI application',
     badge: 'POPULAR',
   },
@@ -85,6 +91,12 @@ const PAYMENT_MODES: {
     name: 'Net Banking',
     icon: '🏦',
     description: 'Direct payment from major Indian banks',
+  },
+  {
+    id: 'cod',
+    name: 'Cash on delivery (COD)',
+    icon: '💵',
+    description: 'Pay cash or scan rider UPI QR code upon delivery',
   },
 ];
 
@@ -168,6 +180,21 @@ const tabs: { id: Tab; label: string; icon: string }[] = [
 
 function storeId(store: Store): string {
   return store._id || store.id || '';
+}
+
+function isStoreOpen(store?: Store | null): boolean {
+  if (!store) return false;
+  if (store.isApproved === false) return false;
+  if (store.isOpen === false || store.isOnline === false) return false;
+  const anyStore = store as Record<string, unknown>;
+  if (anyStore.open === false || anyStore.online === false) return false;
+  if (typeof anyStore.status === 'string') {
+    const s = anyStore.status.toLowerCase().trim();
+    if (s === 'closed' || s === 'offline' || s === 'inactive' || s === 'blocked') {
+      return false;
+    }
+  }
+  return true;
 }
 
 function normalizeIdString(val: unknown): string {
@@ -604,12 +631,60 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState('');
   const [savingReview, setSavingReview] = useState(false);
-  const [supportModalVisible, setSupportModalVisible] = useState(false);
-  const [profileSettingsVisible, setProfileSettingsVisible] = useState(false);
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const customerId = getCustomerId(session?.user);
   const [cart, setCart] = useState<CartLine[]>([]);
+  const [toastInfo, setToastInfo] = useState<{ name: string; price: number } | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastFadeAnim = useRef(new Animated.Value(0)).current;
+  const toastTranslateAnim = useRef(new Animated.Value(15)).current;
+
+  const showAddToCartToast = useCallback((name: string, price: number) => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    setToastInfo({ name, price });
+    toastFadeAnim.setValue(0);
+    toastTranslateAnim.setValue(15);
+    Animated.parallel([
+      Animated.timing(toastFadeAnim, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+      Animated.timing(toastTranslateAnim, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    toastTimeoutRef.current = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(toastFadeAnim, {
+          toValue: 0,
+          duration: 240,
+          useNativeDriver: true,
+        }),
+        Animated.timing(toastTranslateAnim, {
+          toValue: 12,
+          duration: 240,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        setToastInfo(null);
+      });
+    }, 2800);
+  }, [toastFadeAnim, toastTranslateAnim]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
   const [selectedStoreId, setSelectedStoreId] = useState('');
   const [selectedAddressId, setSelectedAddressId] = useState('');
   const [search, setSearch] = useState('');
@@ -753,7 +828,8 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
   const [editingAddressId, setEditingAddressId] = useState('');
   const [savingAddress, setSavingAddress] = useState(false);
   const [placingOrder, setPlacingOrder] = useState(false);
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod>('cod');
+  const [paymentModalVisible, setPaymentModalVisible] = useState(false);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod>('razorpay');
   const [upiId, setUpiId] = useState('');
   const [cardForm, setCardForm] = useState({
     cardNumber: '',
@@ -772,7 +848,9 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     postalCode: '',
     phone: session.user.phone || '',
     digipin: session.user.digipin || '',
+    coordinates: [] as number[],
   });
+  const [detectingGps, setDetectingGps] = useState(false);
 
   const allStores = useMemo(() => [...restaurants, ...shops], [restaurants, shops]);
   const allMenuItems = useMemo(() => [...restaurantItems, ...shopItems], [restaurantItems, shopItems]);
@@ -781,14 +859,27 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
   const menuItems = mode === 'shop' ? shopItems : restaurantItems;
 
   const selectedStore = useMemo(() => {
-    return allStores.find((store) => storeId(store) === selectedStoreId)
+    const found = allStores.find((store) => storeId(store) === selectedStoreId)
       || stores.find((store) => storeId(store) === selectedStoreId);
+    if (found && !isStoreOpen(found)) {
+      return null;
+    }
+    return found;
   }, [allStores, stores, selectedStoreId]);
 
   const visibleItems = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     return menuItems.filter((item) => {
       const ownerStore = findStoreForItem(item, allStores);
+      // When restaurant or shop is closed, do not display its items
+      if (ownerStore && !isStoreOpen(ownerStore)) {
+        return false;
+      }
+      const anyItem = item as Record<string, unknown>;
+      if (anyItem.isOpen === false || anyItem.isStoreOpen === false || anyItem.isOnline === false) {
+        return false;
+      }
+
       const matchesStore = !selectedStoreId || (selectedStore ? itemBelongsToStore(item, selectedStore) : (
         normalizeIdString(item.restaurantId) === normalizeIdString(selectedStoreId) ||
         (selectedStore && String((selectedStore as Store).name || '').trim().toLowerCase() === getItemStoreName(item).toLowerCase())
@@ -836,6 +927,9 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     const addedStoreKeys = new Set<string>();
 
     const addStore = (store: Store) => {
+      // Must be currently open and approved
+      if (!isStoreOpen(store)) return;
+      if (store.isServiceable === false) return;
       const key = (normalizeIdString(store._id || store.id) || String(store.name || '').trim().toLowerCase());
       if (!key || addedStoreKeys.has(key)) return;
       addedStoreKeys.add(key);
@@ -854,7 +948,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     if (hasCategory && !query) {
       // (A) Check stores in current mode
       for (const store of stores) {
-        if (store.isApproved === false) continue;
+        if (!isStoreOpen(store)) continue;
         if (!storePassesDietary(store)) continue;
         if (storeMatchesCategory(store, selectedCategory, menuItems)) {
           addStore(store);
@@ -863,7 +957,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
 
       // (B) Check allStores (to include stores across all lists regardless of distance filter)
       for (const store of allStores) {
-        if (store.isApproved === false) continue;
+        if (!isStoreOpen(store)) continue;
         if (!storePassesDietary(store)) continue;
         if (storeMatchesCategory(store, selectedCategory, allMenuItems)) {
           addStore(store);
@@ -873,54 +967,21 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       // (C) For every matching menu item in visibleItems, add its selling store!
       for (const item of visibleItems) {
         const owner = findStoreForItem(item, allStores);
-        if (owner && storePassesDietary(owner)) {
+        if (owner && isStoreOpen(owner) && storePassesDietary(owner)) {
           addStore(owner);
-        } else {
-          const storeDisplayName = getItemStoreName(item) || item.restaurantName || (item as any).shopName;
-          if (storeDisplayName) {
-            addStore({
-              _id: String(item.restaurantId || ''),
-              id: String(item.restaurantId || ''),
-              name: storeDisplayName,
-              restaurantAddress: (item as any).restaurantAddress || (item as any).shopAddress || '',
-              address: (item as any).restaurantAddress || (item as any).shopAddress || '',
-              image: item.image,
-              cuisine: item.category || (mode === 'shop' ? 'Grocery' : 'North Indian, Continental'),
-              isOpen: true,
-              isOnline: true,
-              isApproved: true,
-              isServiceable: true,
-            });
-          }
         }
       }
 
-      // (D) Also check allMenuItems: any restaurant selling an item in this category is guaranteed to appear!
+      // (D) Also check allMenuItems: any open restaurant selling an item in this category is guaranteed to appear!
       for (const item of allMenuItems) {
+        const owner = findStoreForItem(item, allStores);
+        if (!owner || !isStoreOpen(owner)) continue;
         if (dietaryFilter === 'veg' && !isItemVeg(item)) continue;
         if (dietaryFilter === 'non-veg' && isItemVeg(item)) continue;
         if (!itemMatchesCategory(item, selectedCategory)) continue;
 
-        const owner = findStoreForItem(item, allStores);
-        if (owner && storePassesDietary(owner)) {
+        if (storePassesDietary(owner)) {
           addStore(owner);
-        } else {
-          const storeDisplayName = getItemStoreName(item) || item.restaurantName || (item as any).shopName;
-          if (storeDisplayName) {
-            addStore({
-              _id: String(item.restaurantId || ''),
-              id: String(item.restaurantId || ''),
-              name: storeDisplayName,
-              restaurantAddress: (item as any).restaurantAddress || (item as any).shopAddress || '',
-              address: (item as any).restaurantAddress || (item as any).shopAddress || '',
-              image: item.image,
-              cuisine: item.category || (mode === 'shop' ? 'Grocery' : 'North Indian, Continental'),
-              isOpen: true,
-              isOnline: true,
-              isApproved: true,
-              isServiceable: true,
-            });
-          }
         }
       }
 
@@ -930,7 +991,8 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     // 2. When NOT searching and NO category selected:
     if (!query) {
       return stores.filter((store) => {
-        if (store.isApproved === false || store.isServiceable === false) return false;
+        if (!isStoreOpen(store)) return false;
+        if (store.isServiceable === false) return false;
         return storePassesDietary(store);
       });
     }
@@ -938,7 +1000,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     // 3. When searching (with or without category):
     // (A) Check stores in current mode whose name, cuisine, category, or address matches query
     for (const store of stores) {
-      if (store.isApproved === false) continue;
+      if (!isStoreOpen(store)) continue;
       if (!storePassesDietary(store)) continue;
       if (hasCategory && !storeMatchesCategory(store, selectedCategory, menuItems)) continue;
 
@@ -960,31 +1022,14 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     // (B) For every matching menu item in visibleItems, add its selling store!
     for (const item of visibleItems) {
       const owner = findStoreForItem(item, allStores);
-      if (owner && storePassesDietary(owner)) {
+      if (owner && isStoreOpen(owner) && storePassesDietary(owner)) {
         addStore(owner);
-      } else {
-        const storeDisplayName = getItemStoreName(item) || item.restaurantName || (item as any).shopName;
-        if (storeDisplayName) {
-          addStore({
-            _id: String(item.restaurantId || ''),
-            id: String(item.restaurantId || ''),
-            name: storeDisplayName,
-            restaurantAddress: (item as any).restaurantAddress || (item as any).shopAddress || '',
-            address: (item as any).restaurantAddress || (item as any).shopAddress || '',
-            image: item.image,
-            cuisine: item.category || (mode === 'shop' ? 'Grocery' : 'North Indian, Continental'),
-            isOpen: true,
-            isOnline: true,
-            isApproved: true,
-            isServiceable: true,
-          });
-        }
       }
     }
 
-    // (C) Also check allStores if any store sells any item in allMenuItems matching query
+    // (C) Also check allStores if any open store sells any item in allMenuItems matching query
     for (const store of allStores) {
-      if (store.isApproved === false) continue;
+      if (!isStoreOpen(store)) continue;
       if (!storePassesDietary(store)) continue;
       if (hasCategory && !storeMatchesCategory(store, selectedCategory, allMenuItems)) continue;
 
@@ -1379,12 +1424,33 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     setSearch('');
   }
 
-  function addItem(item: MenuItem) {
+  function addItem(item: MenuItem, variant?: ItemVariant) {
+    const itemStore = findStoreForItem(item, allStores);
+    if (itemStore && !isStoreOpen(itemStore)) {
+      Alert.alert('Store closed', `${itemStore.name || 'This store'} is currently closed and not accepting orders.`);
+      return;
+    }
+
     const itemStoreType = item.storeType || (item.isShopItem ? 'shop' : mode);
     const otherStoreInCart = cart.find((line) =>
       line.restaurantId !== item.restaurantId
       || (line.storeType || (line.isShopItem ? 'shop' : mode)) !== itemStoreType,
     );
+
+    const lineId = variant ? `${item._id}::${variant.id}` : item._id;
+    const lineName = variant ? `${item.name} (${variant.name})` : item.name;
+    const linePrice = variant ? variant.price : item.price;
+
+    const cartLinePayload: CartLine = {
+      ...item,
+      _id: lineId,
+      name: lineName,
+      price: linePrice,
+      storeType: itemStoreType,
+      availableQuantity: item.quantity,
+      selectedVariant: variant,
+      quantity: 1,
+    };
 
     if (otherStoreInCart) {
       Alert.alert(
@@ -1398,12 +1464,8 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
             onPress: () => {
               setCouponValidation(null);
               setCouponCode('');
-              setCart([{
-                ...item,
-                storeType: itemStoreType,
-                availableQuantity: item.quantity,
-                quantity: 1,
-              }]);
+              setCart([cartLinePayload]);
+              showAddToCartToast(lineName, linePrice);
             },
           },
         ],
@@ -1411,7 +1473,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       return;
     }
 
-    const existing = cart.find((line) => line._id === item._id);
+    const existing = cart.find((line) => line._id === lineId);
     if (existing && item.quantity !== undefined && existing.quantity >= item.quantity) {
       Alert.alert('Stock limit reached', `Only ${item.quantity} of this item are currently available.`);
       return;
@@ -1419,17 +1481,13 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     setCouponValidation(null);
     setCart((current) => {
       if (!existing) {
-        return [...current, {
-          ...item,
-          storeType: itemStoreType,
-          availableQuantity: item.quantity,
-          quantity: 1,
-        }];
+        return [...current, cartLinePayload];
       }
-      return current.map((line) => line._id === item._id
+      return current.map((line) => line._id === lineId
         ? { ...line, quantity: line.quantity + 1 }
         : line);
     });
+    showAddToCartToast(lineName, linePrice);
   }
 
   function changeQuantity(itemId: string, delta: number) {
@@ -1450,6 +1508,55 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       .filter((line) => line.quantity > 0));
   }
 
+  async function detectCurrentGpsLocation() {
+    setDetectingGps(true);
+    setError('');
+    try {
+      let permission = await Location.getForegroundPermissionsAsync();
+      if (!permission.granted) {
+        permission = await Location.requestForegroundPermissionsAsync();
+      }
+      if (!permission.granted) {
+        Alert.alert('Permission needed', 'Location permission is required to detect your current GPS location.');
+        return;
+      }
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+      const lat = Number(position.coords.latitude.toFixed(6));
+      const lng = Number(position.coords.longitude.toFixed(6));
+
+      let geocodedCity = '';
+      let geocodedPostal = '';
+      let geocodedArea = '';
+      try {
+        const reverse = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+        if (reverse && reverse[0]) {
+          geocodedCity = reverse[0].city || reverse[0].subregion || '';
+          geocodedPostal = reverse[0].postalCode || '';
+          geocodedArea = reverse[0].district || reverse[0].street || '';
+        }
+      } catch {}
+
+      setAddressForm((form) => ({
+        ...form,
+        coordinates: [lng, lat],
+        city: form.city || geocodedCity,
+        postalCode: form.postalCode || geocodedPostal,
+        locality: form.locality || geocodedArea,
+      }));
+
+      Alert.alert(
+        'GPS Location Detected',
+        `Current GPS location (${lat.toFixed(5)}, ${lng.toFixed(5)}) set for delivery. If you have not set a DIGIPIN, your delivery rider will navigate using this GPS location.`,
+      );
+    } catch (reason) {
+      setError(getErrorMessage(reason));
+    } finally {
+      setDetectingGps(false);
+    }
+  }
+
   async function saveAddress() {
     if (!addressForm.line1.trim() || !addressForm.city.trim() || !addressForm.postalCode.trim()) {
       setError('Enter a street address, city, and postal code.');
@@ -1466,6 +1573,10 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       const existingAddress = editingAddressId
         ? addresses.find((address) => address._id === editingAddressId)
         : undefined;
+      const coords = addressForm.coordinates?.length === 2
+        ? addressForm.coordinates
+        : existingAddress?.coordinates || existingAddress?.location?.coordinates || [];
+
       await apiRequest(
         editingAddressId
           ? `/api/customer/addresses/${editingAddressId}`
@@ -1477,6 +1588,8 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
             ...addressForm,
             label: addressForm.label.trim() || 'Home',
             digipin: cleanDigipin,
+            coordinates: coords,
+            location: coords.length === 2 ? { type: 'Point', coordinates: coords } : undefined,
             isDefault: existingAddress?.isDefault ?? addresses.length === 0,
           }),
         },
@@ -1491,6 +1604,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
         postalCode: '',
         phone: session.user.phone || '',
         digipin: session.user.digipin || '',
+        coordinates: [],
       });
       setAddressFormVisible(false);
       setEditingAddressId('');
@@ -1539,6 +1653,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       postalCode: address.postalCode,
       phone: address.phone || session.user.phone || '',
       digipin: address.digipin || '',
+      coordinates: address.coordinates || address.location?.coordinates || [],
     });
     setAddressFormVisible(true);
     setTab('addresses');
@@ -1566,7 +1681,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     ]);
   }
 
-  async function placeOrder() {
+  function startPaymentFlow() {
     if (!cart.length) return;
     if (!currentAddress) {
       setError('Add a delivery address before placing your order.');
@@ -1574,6 +1689,16 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       setAddressFormVisible(true);
       return;
     }
+    setError('');
+    setPaymentModalVisible(true);
+  }
+
+  async function placeOrder() {
+    startPaymentFlow();
+  }
+
+  async function completeOrderWithPayment(paymentDetails: PaymentSuccessDetails) {
+    if (!cart.length || !currentAddress) return;
 
     setPlacingOrder(true);
     setError('');
@@ -1582,31 +1707,6 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     const selectedStore = [...restaurants, ...shops].find(
       (store) => storeId(store) === cart[0].restaurantId,
     );
-
-    let paymentTransactionId = '';
-    let utrNumber = '';
-
-    if (selectedPaymentMethod === 'upi') {
-      if (upiId.trim() && !upiId.includes('@')) {
-        setError('Please enter a valid UPI ID (e.g. yourname@upi).');
-        setPlacingOrder(false);
-        return;
-      }
-      paymentTransactionId = `UPI_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-      utrNumber = `UTR${Date.now().toString().slice(-8)}`;
-    } else if (selectedPaymentMethod === 'card') {
-      const cleanCard = cardForm.cardNumber.replace(/\s/g, '');
-      if (cleanCard.length > 0 && cleanCard.length < 12) {
-        setError('Please enter a valid card number (at least 12 digits).');
-        setPlacingOrder(false);
-        return;
-      }
-      paymentTransactionId = `CARD_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    } else if (selectedPaymentMethod === 'netbanking') {
-      paymentTransactionId = `NB_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    } else {
-      paymentTransactionId = 'COD-PAY-ON-DELIVERY';
-    }
 
     try {
       const result = await apiRequest<{ order: Order }>(
@@ -1626,12 +1726,17 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
               price: Number(item.price),
               category: item.category || '',
             })),
-            paymentMethod: selectedPaymentMethod,
-            paymentTransactionId,
-            ...(utrNumber ? { utrNumber, utrReference: utrNumber } : {}),
-            ...(selectedPaymentMethod === 'upi' && upiId.trim() ? { upiId: upiId.trim() } : {}),
-            ...(selectedPaymentMethod === 'card' && cardForm.cardHolder.trim() ? { cardHolderName: cardForm.cardHolder.trim() } : {}),
-            ...(selectedPaymentMethod === 'netbanking' ? { bankName: selectedBank } : {}),
+            paymentMethod: paymentDetails.paymentMethod,
+            paymentStatus: paymentDetails.paymentStatus,
+            paymentTransactionId: paymentDetails.paymentTransactionId,
+            paidAt: paymentDetails.paymentStatus === 'paid' ? new Date().toISOString() : undefined,
+            ...(paymentDetails.razorpayPaymentId ? { razorpayPaymentId: paymentDetails.razorpayPaymentId } : {}),
+            ...(paymentDetails.razorpayOrderId ? { razorpayOrderId: paymentDetails.razorpayOrderId } : {}),
+            ...(paymentDetails.razorpaySignature ? { razorpaySignature: paymentDetails.razorpaySignature } : {}),
+            ...(paymentDetails.utrNumber ? { utrNumber: paymentDetails.utrNumber, utrReference: paymentDetails.utrNumber } : {}),
+            ...(paymentDetails.upiId ? { upiId: paymentDetails.upiId } : {}),
+            ...(paymentDetails.cardLast4 ? { cardLast4: paymentDetails.cardLast4 } : {}),
+            ...(paymentDetails.bankName ? { bankName: paymentDetails.bankName } : {}),
             ...(validatedCouponCode ? { couponCodes: [validatedCouponCode] } : {}),
             addressId: currentAddress._id,
             deliveryAddress: {
@@ -1649,29 +1754,35 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
           }),
         },
       );
+      setPaymentModalVisible(false);
       setCart([]);
       setCouponCode('');
       setCouponValidation(null);
       setBills((current) => {
         const next = { ...current };
-        delete next[result.order._id];
+        if (result?.order?._id) {
+          delete next[result.order._id];
+        }
         return next;
       });
       setTab('orders');
       await loadOrders();
-      const paymentLabel = selectedPaymentMethod === 'cod'
+      const paymentLabel = paymentDetails.paymentMethod === 'cod'
         ? 'Cash on delivery'
-        : selectedPaymentMethod === 'upi'
-          ? `UPI${upiId.trim() ? ` (${upiId.trim()})` : ''}`
-          : selectedPaymentMethod === 'card'
-            ? 'Credit/Debit Card'
-            : `Net Banking (${selectedBank})`;
+        : paymentDetails.paymentMethod === 'razorpay'
+          ? `Razorpay (${paymentDetails.razorpayPaymentId || paymentDetails.paymentTransactionId})`
+          : paymentDetails.paymentMethod === 'upi'
+            ? `UPI${paymentDetails.upiId ? ` (${paymentDetails.upiId})` : ''}`
+            : paymentDetails.paymentMethod === 'card'
+              ? 'Credit/Debit Card'
+              : `Net Banking (${paymentDetails.bankName || selectedBank})`;
       Alert.alert(
-        'Order placed',
-        `${result.order.orderNumber || 'Your order'} has been placed with ${selectedStore?.name || 'Tomato'}${validatedCouponCode ? ` using coupon ${validatedCouponCode}` : ''}. Payment mode: ${paymentLabel}.`,
+        paymentDetails.paymentStatus === 'paid' ? 'Payment Confirmed & Order Placed' : 'Order Placed',
+        `${result?.order?.orderNumber || 'Your order'} has been placed with ${selectedStore?.name || 'Tomato'}${validatedCouponCode ? ` using coupon ${validatedCouponCode}` : ''}.\n\nPayment Mode: ${paymentLabel}\nStatus: ${paymentDetails.paymentStatus.toUpperCase()}\nTransaction ID: ${paymentDetails.paymentTransactionId}`,
       );
     } catch (reason) {
       setError(getErrorMessage(reason));
+      throw reason;
     } finally {
       setPlacingOrder(false);
     }
@@ -1711,107 +1822,28 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
 
   return (
     <View style={styles.app}>
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={styles.brandSearchRow}>
-            <Pressable
-              accessibilityLabel="Go to home screen"
-              onPress={() => {
-                triggerBrandAnimation();
-                setTab('browse');
-                setSelectedStoreId('');
-                setSelectedCategory('');
-                if (searchFocused) {
-                  triggerSearchLayout();
-                  setSearchFocused(false);
-                  Keyboard.dismiss();
-                }
-              }}
-            >
-              <Animated.View style={[styles.brandAnimatedRow, { transform: [{ scale: brandScale }] }]}>
-                <Animated.Text
-                  style={[
-                    styles.brandEmoji,
-                    {
-                      transform: [
-                        { rotateX: flipRotation },
-                        { rotate: wobbleRotation },
-                      ],
-                    },
-                  ]}
-                >
-                  🍅
-                </Animated.Text>
-                <Text style={styles.brand}>
-                  {searchFocused ? 'T' : 'Tomato'}
-                </Text>
-              </Animated.View>
-            </Pressable>
-            <View style={styles.headerSearchWrap}>
-              <Text style={styles.headerSearchIcon}>🔍</Text>
-              <TextInput
-                ref={searchInputRef}
-                accessibilityLabel="Search dishes or products"
-                autoCapitalize="none"
-                autoCorrect={false}
-                numberOfLines={1}
-                returnKeyType="search"
-                selectionColor="#14532d"
-                onBlur={() => {
-                  triggerSearchLayout();
-                  setSearchFocused(false);
-                }}
-                onFocus={() => {
-                  triggerSearchLayout();
-                  setSearchFocused(true);
-                  if (tab !== 'browse') setTab('browse');
-                }}
-                onChangeText={(text) => {
-                  if (!searchFocused) {
-                    triggerSearchLayout();
-                    setSearchFocused(true);
-                  }
-                  if (selectedStoreId && text.trim()) {
-                    setSelectedStoreId('');
-                  }
-                  setSearch(text);
-                  if (tab !== 'browse') setTab('browse');
-                }}
-                placeholder="Search…"
-                placeholderTextColor="#6d7d71"
-                style={styles.headerSearchInput}
-                value={search}
-              />
-              {!!search && (
-                <Pressable
-                  hitSlop={8}
-                  onPress={() => setSearch('')}
-                  style={styles.headerSearchClear}
-                >
-                  <Text style={styles.headerSearchClearText}>✕</Text>
-                </Pressable>
-              )}
-            </View>
-          </View>
-          <Pressable
-            accessibilityLabel="Select default delivery address and pincode"
-            onPress={() => setAddressDropdownVisible(true)}
-            style={styles.deliveringRow}
-          >
-            <Text numberOfLines={1} style={styles.delivering}>
-              Delivering to you{defaultPostalCode ? ` · ${defaultPostalCode}` : ''}
-            </Text>
-            <Text style={styles.dropdownCaret}>▾</Text>
-          </Pressable>
-        </View>
-        <View style={styles.headerActions}>
-          <Pressable
-            accessibilityLabel="Notifications and updates"
-            onPress={() => void showNotifications()}
-            style={styles.headerIconButton}
-          >
-            <Text style={styles.notificationIcon}>🔔</Text>
-          </Pressable>
+      <GlobalHeader
+        session={session}
+        onBrandPress={() => {
+          setTab('browse');
+          setSelectedStoreId('');
+          setSelectedCategory('');
+        }}
+        searchQuery={search}
+        onSearchChange={(text) => {
+          if (selectedStoreId && text.trim()) {
+            setSelectedStoreId('');
+          }
+          setSearch(text);
+          if (tab !== 'browse') setTab('browse');
+        }}
+        searchPlaceholder="Search dishes, restaurants…"
+        addressText="Delivering to you"
+        pincode={defaultPostalCode}
+        onAddressPress={() => setAddressDropdownVisible(true)}
+        onNotificationPress={() => void showNotifications()}
+        hasUnreadNotifications={notifications.length > 0}
+        rightActions={
           <Pressable
             accessibilityLabel={`Cart with ${cartCount} items`}
             onPress={() => setTab('cart')}
@@ -1824,31 +1856,17 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
               </View>
             )}
           </Pressable>
-          <ProfileAccess
-            session={session}
-            roleLabel="Customer"
-            iconOnly
-            items={[
-              { key: 'browse', label: 'Order Online', description: 'Browse restaurants, shops and menus', icon: '⌕' },
-              { key: 'orders', label: 'My orders', description: 'Track orders and view bills', icon: '▤' },
-              { key: 'addresses', label: 'Saved addresses', description: 'Manage delivery locations', icon: '⌖' },
-              { key: 'help', label: 'Help & Support', description: '24/7 Helpline, tickets & customer care', icon: '🎧' },
-              { key: 'profile-settings', label: 'Profile Settings', description: 'Account, DOB, photo & password security', icon: '⚙' },
-            ] satisfies ProfileMenuItem[]}
-            onNavigate={(key) => {
-              if (key === 'profile-settings') {
-                setProfileSettingsVisible(true);
-              } else if (key === 'help') {
-                setSupportModalVisible(true);
-              } else {
-                setTab(key as Tab);
-              }
-            }}
-            onSignOut={performSignOut}
-            onSessionUserUpdate={onSessionUserUpdate}
-          />
-        </View>
-      </View>
+        }
+        roleLabel="Customer"
+        profileMenuItems={[
+          { key: 'browse', label: 'Order Online', description: 'Browse restaurants, shops and menus', icon: '⌕' },
+          { key: 'orders', label: 'My orders', description: 'Track orders and view bills', icon: '▤' },
+          { key: 'addresses', label: 'Saved addresses', description: 'Manage delivery locations', icon: '⌖' },
+        ]}
+        onNavigateProfile={(key) => setTab(key as Tab)}
+        onSignOut={performSignOut}
+        onSessionUserUpdate={onSessionUserUpdate}
+      />
 
       <Modal
         animationType="fade"
@@ -2029,6 +2047,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                     postalCode: '',
                     phone: session.user.phone || '',
                     digipin: session.user.digipin || '',
+                    coordinates: [],
                   });
                   setAddressFormVisible(true);
                   setTab('addresses');
@@ -2398,7 +2417,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                       closed={closed}
                       storeName={storeDisplayName}
                       onPressStore={itemStore ? () => setSelectedStoreId(storeId(itemStore)) : undefined}
-                      onAdd={() => addItem(item)}
+                      onAdd={(variant) => addItem(item, variant)}
                     />
                   );
                 })}
@@ -2660,13 +2679,15 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                   label={
                     placingOrder
                       ? 'Placing order…'
-                      : selectedPaymentMethod === 'cod'
-                        ? `Place cash order · ${formatRupees(estimatedTotal)}`
-                        : selectedPaymentMethod === 'upi'
-                          ? `Pay via UPI · ${formatRupees(estimatedTotal)}`
-                          : selectedPaymentMethod === 'card'
-                            ? `Pay with Card · ${formatRupees(estimatedTotal)}`
-                            : `Pay via Net Banking · ${formatRupees(estimatedTotal)}`
+                      : selectedPaymentMethod === 'razorpay'
+                        ? `Pay with Razorpay · ${formatRupees(estimatedTotal)}`
+                        : selectedPaymentMethod === 'cod'
+                          ? `Place cash order · ${formatRupees(estimatedTotal)}`
+                          : selectedPaymentMethod === 'upi'
+                            ? `Pay via UPI · ${formatRupees(estimatedTotal)}`
+                            : selectedPaymentMethod === 'card'
+                              ? `Pay with Card · ${formatRupees(estimatedTotal)}`
+                              : `Pay via Net Banking · ${formatRupees(estimatedTotal)}`
                   }
                   onPress={() => void placeOrder()}
                 />
@@ -2833,6 +2854,11 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                     <Text style={styles.digipinPillText}>⌖ DIGIPIN: {formatDigipin(address.digipin)}</Text>
                   </View>
                 )}
+                {Array.isArray(address.coordinates) && address.coordinates.length === 2 && (
+                  <View style={styles.gpsRow}>
+                    <Text style={styles.gpsPillText}>📍 Live GPS: {address.coordinates[1].toFixed(5)}, {address.coordinates[0].toFixed(5)}</Text>
+                  </View>
+                )}
                 {!!address.phone && <Text style={styles.itemDescription}>{address.phone}</Text>}
                 <View style={styles.addressActions}>
                   {!address.isDefault && (
@@ -2913,7 +2939,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                 <TextInput
                   autoCapitalize="characters"
                   onChangeText={(value) => setAddressForm((form) => ({ ...form, digipin: value.toUpperCase() }))}
-                  placeholder="Delivery DIGIPIN (e.g. 4M8-9K2-X1P9)"
+                  placeholder="Delivery DIGIPIN (e.g. 4M8-9K2-T3P9)"
                   style={styles.input}
                   value={addressForm.digipin}
                 />
@@ -2922,10 +2948,32 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                     onPress={() => void openMapplsMap(addressForm.digipin)}
                     style={styles.addressMapplsBtn}
                   >
-                    <Text style={styles.addressMapplsBtnText}>🗺️ Find DIGIPIN on Mappls Map</Text>
+                    <Text style={styles.addressMapplsBtnText}>🗺️ Find DIGIPIN on Mappls</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={detectingGps}
+                    onPress={() => void detectCurrentGpsLocation()}
+                    style={styles.addressGpsDetectBtn}
+                  >
+                    <Text style={styles.addressGpsDetectBtnText}>
+                      {detectingGps ? '📍 Detecting GPS…' : '📍 Set Current GPS'}
+                    </Text>
                   </Pressable>
                 </View>
-                <Text style={styles.fieldHint}>DIGIPIN provides a precision 4x4m digital doorstep geocode for your delivery.</Text>
+                {Array.isArray(addressForm.coordinates) && addressForm.coordinates.length === 2 && (
+                  <View style={styles.gpsLocationActiveBadge}>
+                    <Text style={styles.gpsLocationActiveText}>
+                      📍 Current GPS Location Set: {addressForm.coordinates[1].toFixed(5)}, {addressForm.coordinates[0].toFixed(5)}
+                    </Text>
+                  </View>
+                )}
+                <Text style={styles.fieldHint}>
+                  {addressForm.digipin
+                    ? '✓ DIGIPIN is set. Your delivery rider will navigate via this DIGIPIN.'
+                    : addressForm.coordinates?.length === 2
+                      ? '✓ GPS location set. Since DIGIPIN is not set, rider will navigate using this GPS location.'
+                      : 'Tip: You can set a DIGIPIN or your current device GPS location for delivery.'}
+                </Text>
                 <PrimaryButton
                   disabled={savingAddress}
                   label={savingAddress ? 'Saving…' : editingAddressId ? 'Save changes' : 'Save address'}
@@ -2953,6 +3001,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                     postalCode: '',
                     phone: session.user.phone || '',
                     digipin: session.user.digipin || '',
+                    coordinates: [],
                   });
                   setAddressFormVisible(true);
                 }}
@@ -2986,16 +3035,8 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
               <Text style={styles.menuLinkText}>📍   Saved addresses</Text>
               <Text style={styles.chevron}>›</Text>
             </Pressable>
-            <Pressable onPress={() => setSupportModalVisible(true)} style={styles.menuLink}>
-              <Text style={styles.menuLinkText}>🎧   Help & Support</Text>
-              <Text style={styles.chevron}>›</Text>
-            </Pressable>
-            <Pressable onPress={() => setProfileSettingsVisible(true)} style={styles.menuLink}>
-              <Text style={styles.menuLinkText}>⚙️   Profile Settings</Text>
-              <Text style={styles.chevron}>›</Text>
-            </Pressable>
             <Pressable onPress={signOut} style={[styles.menuLink, styles.signOutLink]}>
-              <Text style={styles.signOutText}>🚪   Log out</Text>
+              <Text style={styles.signOutText}>🚪   Sign out</Text>
             </Pressable>
           </View>
         )}
@@ -3024,17 +3065,16 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
         })}
       </View>
 
-      <SupportModal
-        visible={supportModalVisible}
-        onClose={() => setSupportModalVisible(false)}
-        session={session}
-      />
-
-      <ProfileSettingsModal
-        visible={profileSettingsVisible}
-        onClose={() => setProfileSettingsVisible(false)}
-        session={session}
-        onSessionUserUpdate={onSessionUserUpdate}
+      <PaymentModal
+        visible={paymentModalVisible}
+        amount={estimatedTotal}
+        storeName={selectedStore?.name || (cart[0] && getItemStoreName(cart[0])) || 'Tomato'}
+        initialMethod={selectedPaymentMethod}
+        initialUpiId={upiId}
+        initialCard={cardForm}
+        initialBank={selectedBank}
+        onClose={() => setPaymentModalVisible(false)}
+        onSuccess={completeOrderWithPayment}
       />
 
       <Modal
@@ -3055,35 +3095,78 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
             <View style={styles.logoutModalIconWrap}>
               <Text style={styles.logoutModalIcon}>🚪</Text>
             </View>
-            <Text style={styles.logoutModalTitle}>Log out of Tomato?</Text>
+            <Text style={styles.logoutModalTitle}>Sign out from Tomato?</Text>
             <Text style={styles.logoutModalMessage}>
-              Are you sure you want to log out? You can sign back in at any time to access your orders, cart, and profile.
+              Are you sure you want to sign out? You can sign back in at any time to access your orders, cart, and profile.
             </Text>
             <View style={styles.logoutModalActions}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Cancel logout"
+                accessibilityLabel="No, Stay"
                 disabled={isLoggingOut}
                 onPress={() => setLogoutModalVisible(false)}
                 style={[styles.logoutModalBtn, styles.logoutCancelBtn]}
               >
-                <Text style={styles.logoutCancelBtnText}>Cancel</Text>
+                <Text style={styles.logoutCancelBtnText}>No, Stay</Text>
               </Pressable>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Confirm logout"
+                accessibilityLabel="yes, Sign out"
                 disabled={isLoggingOut}
                 onPress={() => void performSignOut()}
                 style={[styles.logoutModalBtn, styles.logoutConfirmBtn]}
               >
                 <Text style={styles.logoutConfirmBtnText}>
-                  {isLoggingOut ? 'Logging out...' : 'Log out'}
+                  {isLoggingOut ? 'Signing out...' : 'yes, Sign out'}
                 </Text>
               </Pressable>
             </View>
           </Pressable>
         </Pressable>
       </Modal>
+
+      {toastInfo && (
+        <Animated.View
+          pointerEvents="box-none"
+          style={[
+            styles.cartToastContainer,
+            {
+              opacity: toastFadeAnim,
+              transform: [{ translateY: toastTranslateAnim }],
+            },
+          ]}
+        >
+          <Pressable
+            accessibilityRole="alert"
+            accessibilityLabel={`item ${toastInfo.name}   ${formatRupees(toastInfo.price)} added to cart.`}
+            onPress={() => {
+              if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+              setToastInfo(null);
+            }}
+            style={styles.cartToastCard}
+          >
+            <View style={styles.cartToastIconBubble}>
+              <Text style={styles.cartToastIcon}>✓</Text>
+            </View>
+            <View style={styles.cartToastContent}>
+              <Text style={styles.cartToastText}>
+                item <Text style={styles.cartToastItemName}>{toastInfo.name}</Text>   <Text style={styles.cartToastPrice}>{formatRupees(toastInfo.price)}</Text> added to cart.
+              </Text>
+            </View>
+            <Pressable
+              hitSlop={8}
+              accessibilityLabel="Dismiss notification"
+              onPress={() => {
+                if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+                setToastInfo(null);
+              }}
+              style={styles.cartToastCloseBtn}
+            >
+              <Text style={styles.cartToastCloseText}>×</Text>
+            </Pressable>
+          </Pressable>
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -3426,6 +3509,10 @@ function StoreCardWithSlider({
 
   const isClosed = store.isOpen === false || store.isOnline === false;
 
+  if (!isStoreOpen(store)) {
+    return null;
+  }
+
   return (
     <Pressable
       accessibilityRole="button"
@@ -3494,23 +3581,28 @@ function StoreCardWithSlider({
                   </Text>
                 </View>
               )}
-              <View style={styles.slidingItemSquareBadgeCorner}>
-                {isItemVeg(activeItem) ? <VegBadge size={10} /> : <NonVegBadge size={10} />}
-              </View>
-              {!!activeItem.category && (
-                <View style={styles.slidingItemSquareCategoryCorner}>
-                  <Text numberOfLines={1} style={styles.slidingItemSquareCategoryText}>
-                    {activeItem.category}
+              <View style={styles.slidingItemSquareHeaderRow}>
+                <View style={[styles.slidingItemSquareBadgeAndName, !activeItem.category && styles.flex]}>
+                  {isItemVeg(activeItem) ? <VegBadge size={10} /> : <NonVegBadge size={10} />}
+                  <Text numberOfLines={1} style={styles.slidingItemSquareNameBesideBadge}>
+                    {activeItem.name}
                   </Text>
                 </View>
-              )}
+                {!!activeItem.category && (
+                  <View style={styles.slidingItemSquareCategoryCorner}>
+                    <Text numberOfLines={1} style={styles.slidingItemSquareCategoryText}>
+                      {activeItem.category}
+                    </Text>
+                  </View>
+                )}
+              </View>
             </View>
 
             {/* Dish / Product Details */}
             <View style={styles.slidingItemSquareDetails}>
               <View style={styles.menuSquareTopRow}>
-                <Text numberOfLines={1} style={[styles.slidingItemSquareName, styles.flex]}>
-                  {activeItem.name}
+                <Text numberOfLines={1} style={[styles.slidingItemSquareDescription, styles.flex]}>
+                  {activeItem.description?.trim() || activeItem.category || 'Fresh & delicious'}
                 </Text>
                 {!!activeItem.rating && (
                   <Text style={styles.menuSquareRating}>★ {activeItem.rating}</Text>
@@ -3582,14 +3674,25 @@ function MenuCard({
   onPressStore,
 }: {
   item: MenuItem;
-  onAdd: () => void;
+  onAdd: (variant?: ItemVariant) => void;
   closed?: boolean;
   storeName?: string;
   onPressStore?: () => void;
 }) {
+  const variants = useMemo(() => (item ? getItemVariants(item) : []), [item]);
+  const [selectedVariant, setSelectedVariant] = useState<ItemVariant>(() => (variants[0] || (item ? { id: 'default', name: 'Regular', price: item.price } : { id: 'default', name: 'Regular', price: 0 })));
+  const [variantPickerVisible, setVariantPickerVisible] = useState(false);
+
+  useEffect(() => {
+    if (variants.length > 0) {
+      setSelectedVariant((current) => variants.find((v) => v.id === current?.id) || variants[0]);
+    }
+  }, [variants]);
+
   if (!item) return null;
   const unavailable = closed || (item.quantity !== undefined && item.quantity <= 0);
   const isVeg = isItemVeg(item);
+
   return (
     <View style={styles.menuCardSquare}>
       {/* Top: Square Image */}
@@ -3630,12 +3733,27 @@ function MenuCard({
         </View>
 
         <View style={styles.menuSquareBottomRow}>
-          <Text style={styles.menuSquarePrice}>{formatRupees(item.price)}</Text>
+          <View style={styles.menuSquarePriceAndVariant}>
+            <Text style={styles.menuSquarePrice}>{formatRupees(selectedVariant.price)}</Text>
+            {variants.length > 0 && (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Select variant for ${item.name}. Currently ${selectedVariant.name}`}
+                onPress={() => setVariantPickerVisible(true)}
+                style={styles.menuSquareVariantPill}
+              >
+                <Text numberOfLines={1} style={styles.menuSquareVariantText}>
+                  {selectedVariant.name}
+                </Text>
+                <Text style={styles.menuSquareVariantCaret}>▾</Text>
+              </Pressable>
+            )}
+          </View>
 
           <Pressable
             accessibilityRole="button"
             disabled={unavailable}
-            onPress={onAdd}
+            onPress={() => onAdd(selectedVariant)}
             style={[styles.menuSquareAddBtn, unavailable && styles.addButtonDisabled]}
           >
             <Text style={[styles.menuSquareAddBtnText, unavailable && styles.closedText]}>
@@ -3644,6 +3762,68 @@ function MenuCard({
           </Pressable>
         </View>
       </View>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={variantPickerVisible}
+        onRequestClose={() => setVariantPickerVisible(false)}
+      >
+        <Pressable
+          style={styles.variantModalBackdrop}
+          onPress={() => setVariantPickerVisible(false)}
+        >
+          <Pressable style={styles.variantModalCard} onPress={(e) => e.stopPropagation?.()}>
+            <View style={styles.variantModalHeader}>
+              <View style={styles.variantModalTitleRow}>
+                <Text style={styles.variantModalIcon}>🍽️</Text>
+                <View style={styles.flex}>
+                  <Text numberOfLines={1} style={styles.variantModalTitle}>{item.name}</Text>
+                  <Text style={styles.variantModalSubtitle}>Choose size or portion</Text>
+                </View>
+              </View>
+              <Pressable
+                accessibilityLabel="Close variant selector"
+                onPress={() => setVariantPickerVisible(false)}
+                style={styles.variantModalCloseBtn}
+              >
+                <Text style={styles.variantModalCloseText}>✕</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.variantOptionsList}>
+              {variants.map((v) => {
+                const isSelected = v.id === selectedVariant.id;
+                return (
+                  <Pressable
+                    key={v.id}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isSelected }}
+                    onPress={() => {
+                      setSelectedVariant(v);
+                      setVariantPickerVisible(false);
+                    }}
+                    style={[
+                      styles.variantOptionRow,
+                      isSelected && styles.variantOptionRowSelected,
+                    ]}
+                  >
+                    <View style={[styles.variantRadioCircle, isSelected && styles.variantRadioCircleSelected]}>
+                      {isSelected && <View style={styles.variantRadioInnerDot} />}
+                    </View>
+                    <Text style={[styles.variantOptionName, isSelected && styles.variantOptionNameSelected]}>
+                      {v.name}
+                    </Text>
+                    <Text style={[styles.variantOptionPrice, isSelected && styles.variantOptionPriceSelected]}>
+                      {formatRupees(v.price)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -3798,7 +3978,24 @@ function OrderCard({
         </View>
 
         <Text style={styles.paymentNoteRow}>
-          {((order.paymentMethod || 'cod').toLowerCase() === 'cash' ? 'COD' : (order.paymentMethod || 'cod')).toUpperCase()} · {(order.paymentStatus || 'pending').toUpperCase()}
+          {(() => {
+            const isPaid = (order.paymentStatus || '').toLowerCase() === 'paid';
+            const isPending = (order.paymentStatus || '').toLowerCase() === 'pending' || !isPaid;
+            const methodRaw = (order.paymentMethod || 'cod').toLowerCase();
+            const isCod = methodRaw === 'cod' || methodRaw === 'cash';
+            const methodLabel = methodRaw === 'razorpay' ? '⚡ RAZORPAY' : isCod ? 'COD' : methodRaw.toUpperCase();
+            return (
+              <>
+                <Text style={isCod ? { color: '#dc2626', fontWeight: '800' } : undefined}>
+                  {methodLabel}
+                </Text>
+                {' · '}
+                <Text style={isPaid ? { color: '#16a34a', fontWeight: '800' } : isPending ? { color: '#ca8a04', fontWeight: '800' } : undefined}>
+                  {(order.paymentStatus || (isPaid ? 'paid' : 'pending')).toUpperCase()}
+                </Text>
+              </>
+            );
+          })()}
         </Text>
       </View>
       {!!order.items?.length && (
@@ -3882,7 +4079,24 @@ function OrderCard({
           <View style={styles.billDivider} />
           <BillRow bold label="Total" value={formatRupees(Number(bill.totalAmount || order.totalAmount || 0))} />
           <Text style={styles.paymentNote}>
-            {(bill.paymentMethod || order.paymentMethod || 'cod').toUpperCase()} · {(bill.paymentStatus || order.paymentStatus || 'pending').toUpperCase()}
+            {(() => {
+              const rawMethod = (bill.paymentMethod || order.paymentMethod || 'cod').toLowerCase();
+              const isCod = rawMethod === 'cod' || rawMethod === 'cash';
+              const rawStatus = (bill.paymentStatus || order.paymentStatus || '').toLowerCase();
+              const isPaid = rawStatus === 'paid';
+              const isPending = rawStatus === 'pending' || !isPaid;
+              return (
+                <>
+                  <Text style={isCod ? { color: '#dc2626', fontWeight: '800' } : undefined}>
+                    {isCod ? 'COD' : rawMethod.toUpperCase()}
+                  </Text>
+                  {' · '}
+                  <Text style={isPaid ? { color: '#16a34a', fontWeight: '800' } : isPending ? { color: '#ca8a04', fontWeight: '800' } : undefined}>
+                    {(rawStatus || (isPaid ? 'paid' : 'pending')).toUpperCase()}
+                  </Text>
+                </>
+              );
+            })()}
           </Text>
         </View>
       )}
@@ -4735,11 +4949,42 @@ const styles = StyleSheet.create({
   slidingItemSquareEmoji: {
     fontSize: 32,
   },
+  slidingItemSquareHeaderRow: {
+    position: 'absolute',
+    top: 5,
+    left: 5,
+    right: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 4,
+  },
+  slidingItemSquareBadgeAndName: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    borderRadius: 5,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+    maxWidth: '74%',
+  },
+  slidingItemSquareNameBesideBadge: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#1e293b',
+    flexShrink: 1,
+  },
   slidingItemSquareBadgeCorner: {
     position: 'absolute',
     top: 5,
     left: 5,
-    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
     borderRadius: 4,
     padding: 2,
     shadowColor: '#000',
@@ -4749,13 +4994,16 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   slidingItemSquareCategoryCorner: {
-    position: 'absolute',
-    top: 5,
-    right: 5,
-    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
     borderRadius: 5,
     paddingHorizontal: 5,
-    paddingVertical: 1.5,
+    paddingVertical: 2,
+    alignSelf: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 1,
   },
   slidingItemSquareCategoryText: {
     color: '#d83a32',
@@ -4768,12 +5016,21 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0.20)',
+    backgroundColor: 'rgba(255, 255, 255, 0.45)',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.45)',
+    borderTopColor: 'rgba(255, 255, 255, 0.55)',
     paddingHorizontal: 8,
     paddingTop: 5,
     paddingBottom: 6,
+  },
+  slidingItemSquareDescription: {
+    color: '#1e293b',
+    fontSize: 11,
+    fontWeight: '600',
+    marginBottom: 2,
+    textShadowColor: 'rgba(255, 255, 255, 0.95)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   slidingItemSquareName: {
     color: '#111827',
@@ -4997,7 +5254,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
     borderRadius: 6,
     paddingHorizontal: 5,
     paddingVertical: 2.5,
@@ -5018,7 +5275,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 6,
     left: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
     borderRadius: 5,
     padding: 2,
     shadowColor: '#000',
@@ -5028,7 +5285,7 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   menuSquareCategoryBadge: {
-    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
     borderRadius: 6,
     paddingHorizontal: 5,
     paddingVertical: 2.5,
@@ -5107,6 +5364,148 @@ const styles = StyleSheet.create({
     textShadowColor: 'rgba(255, 255, 255, 0.9)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
+  },
+  menuSquarePriceAndVariant: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flexShrink: 1,
+  },
+  menuSquareVariantPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: '#fff4ed',
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    borderRadius: 5,
+    paddingHorizontal: 4,
+    paddingVertical: 1.5,
+  },
+  menuSquareVariantText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#c2410c',
+  },
+  menuSquareVariantCaret: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#ea580c',
+  },
+  variantModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.60)',
+    justifyContent: 'flex-end',
+  },
+  variantModalCard: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: Platform.OS === 'android' ? 24 : 34,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  variantModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1e8e0',
+    marginBottom: 8,
+  },
+  variantModalTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+    marginRight: 8,
+  },
+  variantModalIcon: {
+    fontSize: 22,
+  },
+  variantModalTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1e293b',
+  },
+  variantModalSubtitle: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  variantModalCloseBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  variantModalCloseText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  variantOptionsList: {
+    paddingVertical: 4,
+    gap: 8,
+  },
+  variantOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  variantOptionRowSelected: {
+    backgroundColor: '#fff7ed',
+    borderColor: '#fdba74',
+  },
+  variantRadioCircle: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    borderColor: '#94a3b8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  variantRadioCircleSelected: {
+    borderColor: '#ea580c',
+  },
+  variantRadioInnerDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ea580c',
+  },
+  variantOptionName: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  variantOptionNameSelected: {
+    color: '#c2410c',
+    fontWeight: '800',
+  },
+  variantOptionPrice: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#15803d',
+  },
+  variantOptionPriceSelected: {
+    color: '#166534',
   },
   menuSquareAddBtn: {
     backgroundColor: '#d83a32',
@@ -5348,9 +5747,15 @@ const styles = StyleSheet.create({
   digipinPillText: { color: '#255ab4', fontSize: 11, fontWeight: '700' },
   digipinRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#f0f5ff', borderWidth: 1, borderColor: '#d3e2fb', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5, marginTop: 6, alignSelf: 'stretch' },
   mapplsPillSmall: { fontSize: 10, fontWeight: '800', color: '#1d4ed8' },
-  addressDigipinActionRow: { marginBottom: 10, marginTop: -4 },
-  addressMapplsBtn: { alignSelf: 'flex-start', paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#f5efe8', borderRadius: 7, borderWidth: 1, borderColor: '#e4d8cc' },
+  addressDigipinActionRow: { flexDirection: 'row', gap: 8, marginBottom: 8, marginTop: -4, flexWrap: 'wrap' },
+  addressMapplsBtn: { paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#f5efe8', borderRadius: 7, borderWidth: 1, borderColor: '#e4d8cc' },
   addressMapplsBtnText: { color: '#4a3f37', fontSize: 11, fontWeight: '700' },
+  addressGpsDetectBtn: { paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#f0fdf4', borderRadius: 7, borderWidth: 1, borderColor: '#bbf7d0' },
+  addressGpsDetectBtnText: { color: '#166534', fontSize: 11, fontWeight: '800' },
+  gpsLocationActiveBadge: { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0', borderWidth: 1, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, marginBottom: 8 },
+  gpsLocationActiveText: { color: '#166534', fontSize: 11, fontWeight: '700' },
+  gpsRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5, marginTop: 4, alignSelf: 'flex-start' },
+  gpsPillText: { color: '#166534', fontSize: 11, fontWeight: '700' },
   selectedStoreCard: { backgroundColor: '#fff', borderColor: '#eee4dc', borderWidth: 1, borderRadius: 14, padding: 12, marginBottom: 12 },
   selectedStoreName: { color: '#302923', fontWeight: '800', fontSize: 14 },
   selectedStoreAddress: { color: '#70655d', fontSize: 12, marginTop: 2 },
@@ -5618,5 +6023,73 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#ffffff',
+  },
+  cartToastContainer: {
+    position: 'absolute',
+    bottom: Platform.OS === 'android' ? 88 : 78,
+    left: 14,
+    right: 14,
+    zIndex: 9999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartToastCard: {
+    width: '100%',
+    maxWidth: 460,
+    backgroundColor: '#1f2937',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#374151',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  cartToastIconBubble: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#10b981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartToastIcon: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '900',
+    lineHeight: 16,
+  },
+  cartToastContent: {
+    flex: 1,
+  },
+  cartToastText: {
+    color: '#f3f4f6',
+    fontSize: 13,
+    fontWeight: '500',
+    lineHeight: 18,
+  },
+  cartToastItemName: {
+    color: '#ffffff',
+    fontWeight: '700',
+  },
+  cartToastPrice: {
+    color: '#34d399',
+    fontWeight: '800',
+  },
+  cartToastCloseBtn: {
+    padding: 4,
+    marginLeft: 2,
+  },
+  cartToastCloseText: {
+    color: '#9ca3af',
+    fontSize: 18,
+    fontWeight: '700',
+    lineHeight: 18,
   },
 });

@@ -21,7 +21,7 @@ import {
   normalizeDigipin,
   openMapplsMap,
 } from './digipin';
-import { getCustomerId } from './types';
+import { getAccountDisplayId, getAccountIdLabel, getCustomerId } from './types';
 import type { Session, User } from './types';
 
 export type ProfileMenuItem = {
@@ -492,11 +492,15 @@ export function ProfileSettingsModal({
   onClose,
   session,
   onSessionUserUpdate,
+  roleLabel,
+  onOverviewPress,
 }: {
   visible: boolean;
   onClose: () => void;
   session: Session;
   onSessionUserUpdate?: (user: User) => Promise<void>;
+  roleLabel?: string;
+  onOverviewPress?: () => void;
 }) {
   const [profile, setProfile] = useState(() => initialProfile(session?.user));
   const [busy, setBusy] = useState(false);
@@ -534,7 +538,8 @@ export function ProfileSettingsModal({
     }
   }, [visible, session?.user]);
 
-  const customerId = getCustomerId(session?.user);
+  const accountId = getAccountDisplayId(session?.user, roleLabel);
+  const accountIdLabel = getAccountIdLabel(session?.user, roleLabel);
   const [locatingDigipin, setLocatingDigipin] = useState(false);
 
   async function detectCurrentLocationDigipin() {
@@ -742,7 +747,7 @@ export function ProfileSettingsModal({
           <View style={styles.sheetHeader}>
             <View style={styles.identity}>
               <Text style={styles.sheetTitle} numberOfLines={2}>
-                Account & Profile settings {customerId}
+                Account & Profile settings {accountId}
               </Text>
               <Text style={styles.roleLabel}>Manage your personal details and account credentials.</Text>
             </View>
@@ -816,12 +821,39 @@ export function ProfileSettingsModal({
               </View>
             )}
 
-            {/* Customer ID */}
-            <Text style={styles.fieldLabel}>Customer ID</Text>
+            {/* Account / Restaurant / Shop / Customer ID */}
+            <Text style={styles.fieldLabel}>{accountIdLabel}</Text>
             <View style={styles.readOnlyField}>
-              <Text style={styles.readOnlyText}>{customerId}</Text>
+              <Text style={styles.readOnlyText}>{accountId}</Text>
               <Text style={styles.readOnlyBadge}>VERIFIED ID</Text>
             </View>
+
+            {isPartner && (
+              <Pressable
+                style={styles.partnerOverviewCard}
+                onPress={() => {
+                  onClose();
+                  if (onOverviewPress) onOverviewPress();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Open Overview business and sales report"
+              >
+                <View style={styles.partnerOverviewHeader}>
+                  <Text style={styles.partnerOverviewIcon}>📊</Text>
+                  <View style={styles.flex}>
+                    <Text style={styles.partnerOverviewEyebrow}>BUSINESS ANALYTICS</Text>
+                    <Text style={styles.partnerOverviewTitle}>Overview</Text>
+                    <Text style={styles.partnerOverviewSubtitle}>
+                      {session?.user?.role === 'shop' ? 'Shop Business & Sales Report' : 'Restaurant Business & Sales Report'}
+                    </Text>
+                  </View>
+                  <Text style={styles.partnerOverviewChevron}>›</Text>
+                </View>
+                <Text style={styles.partnerOverviewNote}>
+                  View real-time sales volume, fulfillment metrics & top products
+                </Text>
+              </Pressable>
+            )}
 
             {/* Full Name */}
             <Text style={styles.fieldLabel}>Full Name</Text>
@@ -878,7 +910,7 @@ export function ProfileSettingsModal({
             </View>
             <TextInput
               autoCapitalize="characters"
-              placeholder="e.g. 4M8-9K2-X1P9"
+              placeholder="e.g. 4M8-9K2-T3P9"
               style={styles.input}
               value={profile.digipin}
               onChangeText={(digipin) => setProfile((current) => ({ ...current, digipin: digipin.toUpperCase() }))}
@@ -1108,16 +1140,26 @@ export default function ProfileAccess({
     onNavigate(item.key);
   }
 
+  const userPhoto = session.user.profilePhoto || session.user.photo || session.user.avatar || session.user.image;
+  const initial = (session.user.name || session.user.displayName || '').trim().charAt(0).toUpperCase();
+  const menuItems = items.filter((item) => item.key !== 'help' && item.key !== 'profile-settings');
+  const accountId = getAccountDisplayId(session.user, roleLabel);
+
   return (
     <>
       <Pressable
-        accessibilityLabel="Profile menu. My orders, saved addresses, help and support, profile settings"
+        accessibilityLabel="Account and profile menu"
         accessibilityRole="button"
         onPress={() => setMenuVisible(true)}
-        style={[styles.profileButton, iconOnly && styles.profileButtonCircle]}
+        style={styles.profileButton}
       >
-        <Text style={[styles.profileIcon, iconOnly && styles.profileIconCircle]}>👤</Text>
-        {!iconOnly && <Text style={styles.profileButtonLabel}>Profile</Text>}
+        {userPhoto ? (
+          <Image source={{ uri: apiPath(userPhoto) }} style={styles.headerAvatarImage} />
+        ) : initial ? (
+          <Text style={styles.headerAvatarInitial}>{initial}</Text>
+        ) : (
+          <Text style={styles.profileIconCircle}>👤</Text>
+        )}
       </Pressable>
 
       <Modal
@@ -1149,7 +1191,7 @@ export default function ProfileAccess({
               </View>
               <View style={styles.identity}>
                 <Text numberOfLines={1} style={styles.userName}>{session.user.name || 'Tomato user'}</Text>
-                <Text style={styles.roleLabel}>{roleLabel}</Text>
+                <Text style={styles.roleLabel}>{roleLabel} · {accountId}</Text>
               </View>
               <Pressable
                 accessibilityLabel="Close profile menu"
@@ -1163,7 +1205,7 @@ export default function ProfileAccess({
               </Pressable>
             </View>
             <ScrollView style={styles.menuScroll} showsVerticalScrollIndicator={false}>
-              {items.map((item) => (
+              {menuItems.map((item) => (
                 <Pressable key={item.key} onPress={() => chooseItem(item)} style={styles.menuItem}>
                   <Text style={styles.menuItemIcon}>{item.icon}</Text>
                   <View style={styles.menuItemBody}>
@@ -1197,7 +1239,7 @@ export default function ProfileAccess({
                 style={[styles.menuItem, styles.signOutItem]}
               >
                 <Text style={styles.menuItemIcon}>🚪</Text>
-                <View style={styles.menuItemBody}><Text style={styles.signOutLabel}>Log out</Text></View>
+                <View style={styles.menuItemBody}><Text style={styles.signOutLabel}>Sign out</Text></View>
               </Pressable>
             </ScrollView>
           </Pressable>
@@ -1213,22 +1255,22 @@ export default function ProfileAccess({
               <View style={styles.logoutConfirmIconWrap}>
                 <Text style={styles.logoutConfirmIcon}>🚪</Text>
               </View>
-              <Text style={styles.logoutConfirmTitle}>Log out of Tomato?</Text>
+              <Text style={styles.logoutConfirmTitle}>Sign out from Tomato?</Text>
               <Text style={styles.logoutConfirmMessage}>
-                Are you sure you want to log out? You can sign back in at any time to access your orders and saved details.
+                Are you sure you want to sign out? You can sign back in at any time to access your orders and saved details.
               </Text>
               <View style={styles.logoutConfirmActions}>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Cancel"
+                  accessibilityLabel="No, Stay"
                   onPress={() => setConfirmLogoutVisible(false)}
                   style={[styles.logoutConfirmBtn, styles.logoutCancelBtn]}
                 >
-                  <Text style={styles.logoutCancelBtnText}>Cancel</Text>
+                  <Text style={styles.logoutCancelBtnText}>No, Stay</Text>
                 </Pressable>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Log out"
+                  accessibilityLabel="yes, Sign out"
                   onPress={() => {
                     setConfirmLogoutVisible(false);
                     setMenuVisible(false);
@@ -1236,7 +1278,7 @@ export default function ProfileAccess({
                   }}
                   style={[styles.logoutConfirmBtn, styles.logoutProceedBtn]}
                 >
-                  <Text style={styles.logoutProceedBtnText}>Log out</Text>
+                  <Text style={styles.logoutProceedBtnText}>yes, Sign out</Text>
                 </Pressable>
               </View>
             </View>
@@ -1250,17 +1292,35 @@ export default function ProfileAccess({
         onClose={() => setSettingsVisible(false)}
         session={session}
         onSessionUserUpdate={onSessionUserUpdate}
+        roleLabel={roleLabel}
+        onOverviewPress={() => onNavigate('overview')}
       />
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  profileButton: { minWidth: 78, height: 42, borderRadius: 14, backgroundColor: '#fff0eb', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 5, paddingHorizontal: 9 },
-  profileButtonCircle: { minWidth: 42, width: 42, height: 42, borderRadius: 21, paddingHorizontal: 0, gap: 0 },
-  profileIcon: { color: '#c8322a', fontSize: 20, fontWeight: '700' },
-  profileIconCircle: { fontSize: 18 },
-  profileButtonLabel: { color: '#c8322a', fontSize: 12, fontWeight: '800' },
+  profileButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#fff0eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fca597',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.12,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  profileButtonCircle: { width: 42, height: 42, borderRadius: 21 },
+  headerAvatarImage: { width: 42, height: 42, borderRadius: 21, resizeMode: 'cover' },
+  headerAvatarInitial: { color: '#c8322a', fontSize: 18, fontWeight: '800' },
+  profileIcon: { color: '#c8322a', fontSize: 19, fontWeight: '700' },
+  profileIconCircle: { fontSize: 19 },
   backdrop: { flex: 1, backgroundColor: 'rgba(36, 25, 20, 0.35)', justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 102, paddingHorizontal: 14 },
   menuCard: { width: '100%', maxWidth: 380, maxHeight: '82%', borderRadius: 20, backgroundColor: '#fff', overflow: 'hidden', elevation: 12 },
   menuHeader: { flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#f1e9e2' },
@@ -1467,5 +1527,50 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#ffffff',
+  },
+  partnerOverviewCard: {
+    backgroundColor: '#fff7ed',
+    borderWidth: 1.5,
+    borderColor: '#fed7aa',
+    borderRadius: 14,
+    padding: 13,
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  partnerOverviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  partnerOverviewIcon: {
+    fontSize: 24,
+  },
+  partnerOverviewEyebrow: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#c2410c',
+    letterSpacing: 0.8,
+  },
+  partnerOverviewTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#431407',
+  },
+  partnerOverviewSubtitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#9a3412',
+    marginTop: 1,
+  },
+  partnerOverviewChevron: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#c2410c',
+  },
+  partnerOverviewNote: {
+    fontSize: 11,
+    color: '#7c2d12',
+    marginTop: 8,
+    lineHeight: 16,
   },
 });

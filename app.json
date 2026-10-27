@@ -2,11 +2,13 @@
   "expo": {
     "name": "Tomato",
     "slug": "tomato",
+    "scheme": "tomato",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "android": {
-      "package": "com.rkamn.tomato"
+      "package": "com.rkamn.tomato",
+      "usesCleartextTraffic": true
     },
     "plugins": [
       "expo-secure-store",

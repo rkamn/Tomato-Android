@@ -14,15 +14,18 @@ function resolveApiUrl(): string {
     }
   }
 
-  if (configured) {
-    if (devHost && (configured.includes('10.0.2.2') || configured.includes('localhost') || configured.includes('127.0.0.1'))) {
-      return configured.replace(/10\.0\.2\.2|localhost|127\.0\.0\.1/, devHost);
+  if (devHost) {
+    if (configured) {
+      // Keep port and protocol from configured, but replace host with devHost reachable by current device
+      return configured.replace(/^https?:\/\/([^/:]+)/, (match: string, host: string) => {
+        return match.replace(host, devHost!);
+      });
     }
-    return configured;
+    return `http://${devHost}:5050`;
   }
 
-  if (devHost) {
-    return `http://${devHost}:5050`;
+  if (configured) {
+    return configured;
   }
 
   return Platform.OS === 'android' ? 'http://10.0.2.2:5050' : 'http://localhost:5050';

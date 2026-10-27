@@ -136,6 +136,15 @@ export default function AuthScreen({ onAuthenticated }: Props) {
         ...((result.user?.role === 'customer' || !result.user?.role) && !result.user?.customerId
           ? { customerId: 'cust-1001' }
           : {}),
+        ...(result.user?.role === 'restaurant' && !result.user?.restaurantId
+          ? { restaurantId: 'rest-7067' }
+          : {}),
+        ...(result.user?.role === 'shop' && !result.user?.shopId
+          ? { shopId: 'shop-7067' }
+          : {}),
+        ...((result.user?.role === 'deliveryPartner' || result.user?.role === 'rider') && !result.user?.riderId
+          ? { riderId: 'rider-7067' }
+          : {}),
       };
       await onAuthenticated(result.token, userWithCustomer);
     } catch (reason) {

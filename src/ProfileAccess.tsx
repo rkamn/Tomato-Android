@@ -493,12 +493,14 @@ export function ProfileSettingsModal({
   session,
   onSessionUserUpdate,
   roleLabel,
+  onOverviewPress,
 }: {
   visible: boolean;
   onClose: () => void;
   session: Session;
   onSessionUserUpdate?: (user: User) => Promise<void>;
   roleLabel?: string;
+  onOverviewPress?: () => void;
 }) {
   const [profile, setProfile] = useState(() => initialProfile(session?.user));
   const [busy, setBusy] = useState(false);
@@ -826,6 +828,33 @@ export function ProfileSettingsModal({
               <Text style={styles.readOnlyBadge}>VERIFIED ID</Text>
             </View>
 
+            {isPartner && (
+              <Pressable
+                style={styles.partnerOverviewCard}
+                onPress={() => {
+                  onClose();
+                  if (onOverviewPress) onOverviewPress();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Open Overview business and sales report"
+              >
+                <View style={styles.partnerOverviewHeader}>
+                  <Text style={styles.partnerOverviewIcon}>📊</Text>
+                  <View style={styles.flex}>
+                    <Text style={styles.partnerOverviewEyebrow}>BUSINESS ANALYTICS</Text>
+                    <Text style={styles.partnerOverviewTitle}>Overview</Text>
+                    <Text style={styles.partnerOverviewSubtitle}>
+                      {session?.user?.role === 'shop' ? 'Shop Business & Sales Report' : 'Restaurant Business & Sales Report'}
+                    </Text>
+                  </View>
+                  <Text style={styles.partnerOverviewChevron}>›</Text>
+                </View>
+                <Text style={styles.partnerOverviewNote}>
+                  View real-time sales volume, fulfillment metrics & top products
+                </Text>
+              </Pressable>
+            )}
+
             {/* Full Name */}
             <Text style={styles.fieldLabel}>Full Name</Text>
             <TextInput
@@ -881,7 +910,7 @@ export function ProfileSettingsModal({
             </View>
             <TextInput
               autoCapitalize="characters"
-              placeholder="e.g. 4M8-9K2-X1P9"
+              placeholder="e.g. 4M8-9K2-T3P9"
               style={styles.input}
               value={profile.digipin}
               onChangeText={(digipin) => setProfile((current) => ({ ...current, digipin: digipin.toUpperCase() }))}
@@ -1264,6 +1293,7 @@ export default function ProfileAccess({
         session={session}
         onSessionUserUpdate={onSessionUserUpdate}
         roleLabel={roleLabel}
+        onOverviewPress={() => onNavigate('overview')}
       />
     </>
   );
@@ -1497,5 +1527,50 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#ffffff',
+  },
+  partnerOverviewCard: {
+    backgroundColor: '#fff7ed',
+    borderWidth: 1.5,
+    borderColor: '#fed7aa',
+    borderRadius: 14,
+    padding: 13,
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  partnerOverviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  partnerOverviewIcon: {
+    fontSize: 24,
+  },
+  partnerOverviewEyebrow: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#c2410c',
+    letterSpacing: 0.8,
+  },
+  partnerOverviewTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#431407',
+  },
+  partnerOverviewSubtitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#9a3412',
+    marginTop: 1,
+  },
+  partnerOverviewChevron: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#c2410c',
+  },
+  partnerOverviewNote: {
+    fontSize: 11,
+    color: '#7c2d12',
+    marginTop: 8,
+    lineHeight: 16,
   },
 });

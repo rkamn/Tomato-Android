@@ -37,6 +37,35 @@ export type RazorpayPaymentResult = {
   card_last4?: string;
 };
 
+function safeBase64(str: string): string {
+  try {
+    if (typeof btoa === 'function') {
+      return btoa(str);
+    }
+  } catch {
+    // fallback
+  }
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+  let output = '';
+  for (let i = 0; i < str.length; i += 3) {
+    const b1 = str.charCodeAt(i);
+    const b2 = i + 1 < str.length ? str.charCodeAt(i + 1) : NaN;
+    const b3 = i + 2 < str.length ? str.charCodeAt(i + 2) : NaN;
+
+    const e1 = b1 >> 2;
+    const e2 = ((b1 & 3) << 4) | (isNaN(b2) ? 0 : b2 >> 4);
+    const e3 = isNaN(b2) ? 64 : ((b2 & 15) << 2) | (isNaN(b3) ? 0 : b3 >> 6);
+    const e4 = isNaN(b3) ? 64 : b3 & 63;
+
+    output +=
+      chars.charAt(e1) +
+      chars.charAt(e2) +
+      chars.charAt(e3) +
+      chars.charAt(e4);
+  }
+  return output;
+}
+
 /**
  * Creates a Razorpay order via Razorpay Orders API.
  * Gracefully falls back to a sandbox order if the external endpoint is unreachable.
@@ -52,9 +81,9 @@ export async function createRazorpayOrder({
 }): Promise<RazorpayOrder> {
   const amountPaise = Math.round(amountRupees * 100);
   const rcpt = receipt || `rcpt_${Date.now()}`;
-  const authHeader = `Basic ${btoa(`${RAZORPAY_CONFIG.keyId}:${RAZORPAY_CONFIG.keySecret}`)}`;
 
   try {
+    const authHeader = `Basic ${safeBase64(`${RAZORPAY_CONFIG.keyId}:${RAZORPAY_CONFIG.keySecret}`)}`;
     const response = await fetch('https://api.razorpay.com/v1/orders', {
       method: 'POST',
       headers: {

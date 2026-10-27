@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
+  Modal,
   Pressable,
   Platform,
   RefreshControl,
@@ -113,8 +114,10 @@ function getDefaultVariants(basePrice: number, isShop: boolean, category = ''): 
 
 function getOrderPriority(order: PartnerOrder): number {
   const s = (order.status || '').toLowerCase();
-  if (s === 'placed') return 0; // New (top)
-  if (s === 'accepted' || s === 'preparing' || s === 'ready_for_pickup') return 1; // In progress
+  if (s === 'placed') return 0; // Placed
+  if (s === 'accepted') return 1; // Accepted
+  if (s === 'preparing') return 2; // Preparing
+  if (s === 'ready_for_pickup') return 3; // Ready for Pickup
   if (
     (s === 'out_for_delivery' ||
       s === 'in_transit' ||
@@ -125,10 +128,10 @@ function getOrderPriority(order: PartnerOrder): number {
     s !== 'cancelled' &&
     s !== 'returned'
   ) {
-    return 2; // Out for Delivery
+    return 4; // Out for Delivery
   }
-  if (s === 'delivered') return 3; // Delivered (bottom)
-  return 4; // Cancelled / returned
+  if (s === 'delivered') return 5; // Delivered
+  return 6; // Cancelled / returned
 }
 
 export default function PartnerApp({
@@ -154,6 +157,7 @@ export default function PartnerApp({
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [overviewModalVisible, setOverviewModalVisible] = useState(false);
   const [signOutModalVisible, setSignOutModalVisible] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
@@ -691,13 +695,25 @@ export default function PartnerApp({
         }
         roleLabel={`${kind} partner`}
         profileMenuItems={[
+          {
+            key: 'overview',
+            label: 'Overview',
+            description: `${kind} Business & Sales Report`,
+            icon: '📊',
+          },
           { key: 'orders', label: 'Orders', description: 'Accept and manage incoming orders', icon: '▤' },
           { key: 'catalog', label: isShop ? 'Inventory' : 'Menu', description: 'Manage products and availability', icon: '☷' },
           { key: 'coupons', label: 'Coupons & offers', description: 'Manage your promotions', icon: '％' },
-          { key: 'finance', label: 'Finance', description: 'View transfers and earnings', icon: '₹' },
+          { key: 'finance', label: 'Finance', description: 'Finance & Transfer Ledger', icon: '₹' },
           { key: 'account', label: 'Business profile & bank', description: 'Edit business and payout details', icon: '⚙' },
         ]}
-        onNavigateProfile={(key) => setTab(key as PartnerTab)}
+        onNavigateProfile={(key) => {
+          if (key === 'overview') {
+            setOverviewModalVisible(true);
+          } else {
+            setTab(key as PartnerTab);
+          }
+        }}
         onSignOut={performSignOut}
         onSessionUserUpdate={onSessionUserUpdate}
       />
@@ -1030,12 +1046,57 @@ export default function PartnerApp({
               <Text style={styles.accountRole}>{kind.toUpperCase()} PARTNER · {getAccountDisplayId(session.user, partnerRole)}</Text>
               {!isApproved && <Text style={styles.pendingText}>Awaiting administrator approval</Text>}
             </View>
+
+            {/* Overview / Business & Sales Report Card */}
+            <Pressable
+              onPress={() => setOverviewModalVisible(true)}
+              style={styles.overviewCardBtn}
+              accessibilityRole="button"
+              accessibilityLabel="View business and sales report"
+            >
+              <View style={styles.overviewCardHeader}>
+                <View style={styles.overviewIconWrap}>
+                  <Text style={styles.overviewIcon}>📊</Text>
+                </View>
+                <View style={styles.flex}>
+                  <Text style={styles.overviewCardEyebrow}>BUSINESS & SALES OVERVIEW</Text>
+                  <Text style={styles.overviewCardTitle}>Overview</Text>
+                  <Text style={styles.overviewCardSubtitle}>
+                    {isShop ? 'Shop Business & Sales Report' : 'Restaurant Business & Sales Report'}
+                  </Text>
+                </View>
+                <Text style={styles.overviewChevron}>›</Text>
+              </View>
+              <View style={styles.overviewQuickMetrics}>
+                <View style={styles.overviewQuickMetric}>
+                  <Text style={styles.overviewQuickValue}>{money(salesVolume)}</Text>
+                  <Text style={styles.overviewQuickLabel}>Total Sales</Text>
+                </View>
+                <View style={styles.overviewQuickMetric}>
+                  <Text style={styles.overviewQuickValue}>{orders.length}</Text>
+                  <Text style={styles.overviewQuickLabel}>Orders</Text>
+                </View>
+                <View style={styles.overviewQuickMetric}>
+                  <Text style={styles.overviewQuickValue}>{deliveredTodayCount}</Text>
+                  <Text style={styles.overviewQuickLabel}>Delivered Today</Text>
+                </View>
+              </View>
+              <View style={styles.overviewCardFooter}>
+                <Text style={styles.overviewCardFooterText}>
+                  View full revenue, payment distribution & top products ›
+                </Text>
+              </View>
+            </Pressable>
+
             <PartnerModules session={session} partnerRole={partnerRole} section="account" />
             <Pressable onPress={() => setTab('orders')} style={styles.accountAction}>
               <Text style={styles.actionLabel}>Manage orders</Text><Text style={styles.chevron}>›</Text>
             </Pressable>
             <Pressable onPress={() => setTab('catalog')} style={styles.accountAction}>
               <Text style={styles.actionLabel}>Manage {isShop ? 'inventory' : 'menu'}</Text><Text style={styles.chevron}>›</Text>
+            </Pressable>
+            <Pressable onPress={() => setTab('finance')} style={styles.accountAction}>
+              <Text style={styles.actionLabel}>Finance & Transfer Ledger</Text><Text style={styles.chevron}>›</Text>
             </Pressable>
             <Pressable onPress={signOut} style={[styles.accountAction, styles.signOut]}>
               <Text style={styles.deleteText}>Sign out</Text>
@@ -1071,6 +1132,17 @@ export default function PartnerApp({
         onConfirm={performSignOut}
         isLoading={isSigningOut}
       />
+      <BusinessSalesReportModal
+        visible={overviewModalVisible}
+        onClose={() => setOverviewModalVisible(false)}
+        orders={orders}
+        items={items}
+        session={session}
+        partnerRole={partnerRole}
+        isOpen={isOpen}
+        isApproved={isApproved}
+        salesVolume={salesVolume}
+      />
     </View>
   );
 }
@@ -1089,7 +1161,10 @@ function PartnerOrderCard({
   onChange: (status: string) => void;
 }) {
   const status = order.status || 'placed';
-  const actions = statusActions[status] || [];
+  const actions = (statusActions[status] || []).map((action) => ({
+    ...action,
+    label: isShop && action.next === 'preparing' ? 'Start packing' : action.label,
+  }));
   const isCancelled = status.toLowerCase() === 'cancelled';
   const isDelivered = status.toLowerCase() === 'delivered';
   const isPickedUp = Boolean(
@@ -1413,6 +1488,334 @@ function ApprovalNotice({ kind }: { kind: string }) {
   );
 }
 
+type ReportPeriod = 'all' | 'today' | 'week' | 'month';
+
+function BusinessSalesReportModal({
+  visible,
+  onClose,
+  orders,
+  items,
+  session,
+  partnerRole,
+  isOpen,
+  isApproved,
+  salesVolume,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  orders: PartnerOrder[];
+  items: MenuItem[];
+  session: Session;
+  partnerRole: PartnerRole;
+  isOpen: boolean;
+  isApproved: boolean;
+  salesVolume: number;
+}) {
+  const isShop = partnerRole === 'shop';
+  const kind = isShop ? 'Shop' : 'Restaurant';
+  const reportTitle = isShop ? 'Shop Business & Sales Report' : 'Restaurant Business & Sales Report';
+  const [period, setPeriod] = useState<ReportPeriod>('all');
+
+  const periodOrders = useMemo(() => {
+    if (period === 'all') return orders;
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const startOfWeek = startOfDay - 7 * 24 * 60 * 60 * 1000;
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+    return orders.filter((order) => {
+      const time = new Date(order.createdAt || 0).getTime();
+      if (period === 'today') return time >= startOfDay;
+      if (period === 'week') return time >= startOfWeek;
+      if (period === 'month') return time >= startOfMonth;
+      return true;
+    });
+  }, [orders, period]);
+
+  const stats = useMemo(() => {
+    const totalOrders = periodOrders.length;
+    const cancelledOrders = periodOrders.filter((o) => {
+      const s = (o.status || '').toLowerCase();
+      return s === 'cancelled' || s === 'returned';
+    });
+    const validOrders = periodOrders.filter((o) => {
+      const s = (o.status || '').toLowerCase();
+      return s !== 'cancelled' && s !== 'returned';
+    });
+    const totalGMV = validOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+    const deliveredOrders = periodOrders.filter((o) => (o.status || '').toLowerCase() === 'delivered');
+    const deliveredGMV = deliveredOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+    const activeOrders = periodOrders.filter((o) =>
+      ['accepted', 'preparing', 'ready_for_pickup'].includes((o.status || '').toLowerCase()),
+    );
+    const outForDeliveryOrders = periodOrders.filter((o) => {
+      const s = (o.status || '').toLowerCase();
+      return (
+        (s === 'out_for_delivery' || s === 'in_transit' || o.isPickedUp || o.pickupStatus === 'picked_up') &&
+        s !== 'delivered' &&
+        s !== 'cancelled' &&
+        s !== 'returned'
+      );
+    });
+    const placedOrders = periodOrders.filter((o) => (o.status || '').toLowerCase() === 'placed');
+    const avgOrderValue = validOrders.length > 0 ? Math.round(totalGMV / validOrders.length) : 0;
+    const fulfillmentRate = totalOrders > 0 ? Math.round((deliveredOrders.length / totalOrders) * 100) : 100;
+
+    const paidOnlineOrders = validOrders.filter(
+      (o) => (o.paymentStatus || '').toLowerCase() === 'paid' && (o.paymentMethod || '').toLowerCase() !== 'cod',
+    );
+    const paidOnlineAmount = paidOnlineOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+    const codOrders = validOrders.filter(
+      (o) => (o.paymentMethod || '').toLowerCase() === 'cod' || (o.paymentMethod || '').toLowerCase() === 'cash',
+    );
+    const codAmount = codOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+
+    const itemSalesMap: Record<string, { name: string; count: number; revenue: number }> = {};
+    for (const order of validOrders) {
+      for (const it of order.items || []) {
+        const name = (it.name || 'Item').trim();
+        const qty = Number(it.quantity) || 1;
+        const price = Number(it.price) || 0;
+        if (!itemSalesMap[name]) {
+          itemSalesMap[name] = { name, count: 0, revenue: 0 };
+        }
+        itemSalesMap[name].count += qty;
+        itemSalesMap[name].revenue += price * qty;
+      }
+    }
+    const topItems = Object.values(itemSalesMap)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    return {
+      totalOrders,
+      totalGMV,
+      deliveredCount: deliveredOrders.length,
+      deliveredGMV,
+      activeCount: activeOrders.length,
+      outForDeliveryCount: outForDeliveryOrders.length,
+      newCount: placedOrders.length,
+      cancelledCount: cancelledOrders.length,
+      avgOrderValue,
+      fulfillmentRate,
+      paidOnlineCount: paidOnlineOrders.length,
+      paidOnlineAmount,
+      codCount: codOrders.length,
+      codAmount,
+      topItems,
+    };
+  }, [periodOrders]);
+
+  const partnerAddress =
+    session.user.restaurantAddress || session.user.shopAddress || session.user.address || '';
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.reportModalContainer}>
+        <View style={styles.reportModalHeader}>
+          <View style={styles.flex}>
+            <Text style={styles.reportEyebrow}>LIVE BUSINESS ANALYTICS</Text>
+            <Text style={styles.reportMainTitle}>Overview</Text>
+            <Text style={styles.reportSubTitle}>{reportTitle}</Text>
+          </View>
+          <Pressable onPress={onClose} style={styles.reportCloseButton} accessibilityLabel="Close report">
+            <Text style={styles.reportCloseText}>×</Text>
+          </Pressable>
+        </View>
+
+        <ScrollView style={styles.reportScroll} contentContainerStyle={styles.reportContent} showsVerticalScrollIndicator={false}>
+          {/* Store Identification Bar */}
+          <View style={styles.reportStoreCard}>
+            <View style={styles.reportStoreTop}>
+              <View style={styles.flex}>
+                <Text style={styles.reportStoreName}>{session.user.name || kind}</Text>
+                <Text style={styles.reportStoreId}>ID: {getAccountDisplayId(session.user, partnerRole)} · {session.user.city || 'Bengaluru'}</Text>
+              </View>
+              <View style={[styles.reportStatusBadge, { backgroundColor: isOpen ? '#dcfce7' : '#f3f4f6' }]}>
+                <Text style={[styles.reportStatusBadgeText, { color: isOpen ? '#15803d' : '#6b7280' }]}>
+                  {isOpen ? '● OPEN' : '○ CLOSED'}
+                </Text>
+              </View>
+            </View>
+            {!!partnerAddress && (
+              <Text style={styles.reportStoreAddress} numberOfLines={2}>📍 {partnerAddress}</Text>
+            )}
+            {!!session.user.digipin && (
+              <Text style={styles.reportStoreDigipin}>🌐 DIGIPIN: {formatDigipin(session.user.digipin)}</Text>
+            )}
+          </View>
+
+          {/* Time Range Pills */}
+          <View style={styles.periodRow}>
+            {(
+              [
+                ['all', 'All Time'],
+                ['today', 'Today'],
+                ['week', 'Last 7 Days'],
+                ['month', 'This Month'],
+              ] as [ReportPeriod, string][]
+            ).map(([p, label]) => (
+              <Pressable
+                key={p}
+                onPress={() => setPeriod(p)}
+                style={[styles.periodChip, period === p && styles.periodChipActive]}
+              >
+                <Text style={[styles.periodChipText, period === p && styles.periodChipTextActive]}>
+                  {label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          {/* Key Sales KPIs Grid */}
+          <Text style={styles.sectionHeaderTitle}>Sales & Revenue</Text>
+          <View style={styles.kpiGrid}>
+            <View style={[styles.kpiCard, { backgroundColor: '#fff7ed', borderColor: '#fed7aa' }]}>
+              <Text style={styles.kpiLabel}>Total Sales (GMV)</Text>
+              <Text style={[styles.kpiValue, { color: '#c2410c' }]}>{money(stats.totalGMV)}</Text>
+              <Text style={styles.kpiSubhint}>{stats.totalOrders} total orders</Text>
+            </View>
+            <View style={[styles.kpiCard, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
+              <Text style={styles.kpiLabel}>Delivered Revenue</Text>
+              <Text style={[styles.kpiValue, { color: '#15803d' }]}>{money(stats.deliveredGMV)}</Text>
+              <Text style={styles.kpiSubhint}>{stats.deliveredCount} delivered ({stats.fulfillmentRate}%)</Text>
+            </View>
+            <View style={[styles.kpiCard, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}>
+              <Text style={styles.kpiLabel}>Avg. Order Value (AOV)</Text>
+              <Text style={[styles.kpiValue, { color: '#1d4ed8' }]}>{money(stats.avgOrderValue)}</Text>
+              <Text style={styles.kpiSubhint}>Per active order</Text>
+            </View>
+            <View style={[styles.kpiCard, { backgroundColor: '#faf5ff', borderColor: '#e9d5ff' }]}>
+              <Text style={styles.kpiLabel}>Active Inventory</Text>
+              <Text style={[styles.kpiValue, { color: '#7e22ce' }]}>{items.length}</Text>
+              <Text style={styles.kpiSubhint}>{isShop ? 'Products' : 'Dishes'} listed</Text>
+            </View>
+          </View>
+
+          {/* Order Lifecycle Breakdown */}
+          <Text style={styles.sectionHeaderTitle}>Order Fulfillment Funnel</Text>
+          <View style={styles.funnelCard}>
+            <View style={styles.funnelRow}>
+              <View style={styles.funnelDotAndLabel}>
+                <View style={[styles.funnelDot, { backgroundColor: '#16a34a' }]} />
+                <Text style={styles.funnelLabel}>Delivered</Text>
+              </View>
+              <Text style={styles.funnelValue}>{stats.deliveredCount} ({stats.fulfillmentRate}%)</Text>
+            </View>
+            <View style={styles.funnelDivider} />
+            <View style={styles.funnelRow}>
+              <View style={styles.funnelDotAndLabel}>
+                <View style={[styles.funnelDot, { backgroundColor: '#2563eb' }]} />
+                <Text style={styles.funnelLabel}>In Progress ({isShop ? 'Packing' : 'Kitchen'})</Text>
+              </View>
+              <Text style={styles.funnelValue}>{stats.activeCount}</Text>
+            </View>
+            <View style={styles.funnelDivider} />
+            <View style={styles.funnelRow}>
+              <View style={styles.funnelDotAndLabel}>
+                <View style={[styles.funnelDot, { backgroundColor: '#9333ea' }]} />
+                <Text style={styles.funnelLabel}>Out For Delivery</Text>
+              </View>
+              <Text style={styles.funnelValue}>{stats.outForDeliveryCount}</Text>
+            </View>
+            <View style={styles.funnelDivider} />
+            <View style={styles.funnelRow}>
+              <View style={styles.funnelDotAndLabel}>
+                <View style={[styles.funnelDot, { backgroundColor: '#ea580c' }]} />
+                <Text style={styles.funnelLabel}>New / Placed</Text>
+              </View>
+              <Text style={styles.funnelValue}>{stats.newCount}</Text>
+            </View>
+            <View style={styles.funnelDivider} />
+            <View style={styles.funnelRow}>
+              <View style={styles.funnelDotAndLabel}>
+                <View style={[styles.funnelDot, { backgroundColor: '#dc2626' }]} />
+                <Text style={styles.funnelLabel}>Cancelled / Returned</Text>
+              </View>
+              <Text style={styles.funnelValue}>{stats.cancelledCount}</Text>
+            </View>
+          </View>
+
+          {/* Payment Method Distribution */}
+          <Text style={styles.sectionHeaderTitle}>Payment Modes</Text>
+          <View style={styles.paymentCard}>
+            <View style={styles.paymentItem}>
+              <View style={styles.paymentHeader}>
+                <Text style={styles.paymentEmoji}>💳</Text>
+                <Text style={styles.paymentType}>Online / Prepaid</Text>
+              </View>
+              <Text style={styles.paymentAmount}>{money(stats.paidOnlineAmount)}</Text>
+              <Text style={styles.paymentSubtext}>{stats.paidOnlineCount} orders settled</Text>
+            </View>
+            <View style={styles.paymentVerticalDivider} />
+            <View style={styles.paymentItem}>
+              <View style={styles.paymentHeader}>
+                <Text style={styles.paymentEmoji}>💵</Text>
+                <Text style={styles.paymentType}>Cash on Delivery (COD)</Text>
+              </View>
+              <Text style={styles.paymentAmount}>{money(stats.codAmount)}</Text>
+              <Text style={styles.paymentSubtext}>{stats.codCount} orders</Text>
+            </View>
+          </View>
+
+          {/* Top Products / Dishes */}
+          <Text style={styles.sectionHeaderTitle}>Top Selling {isShop ? 'Products' : 'Dishes'}</Text>
+          <View style={styles.topItemsCard}>
+            {stats.topItems.length > 0 ? (
+              stats.topItems.map((item, idx) => (
+                <View key={item.name} style={[styles.topItemRow, idx > 0 && styles.topItemDivider]}>
+                  <View style={styles.topItemRankBadge}>
+                    <Text style={styles.topItemRankText}>#{idx + 1}</Text>
+                  </View>
+                  <View style={styles.flex}>
+                    <Text style={styles.topItemName} numberOfLines={1}>{item.name}</Text>
+                    <Text style={styles.topItemQty}>{item.count} units sold</Text>
+                  </View>
+                  <Text style={styles.topItemRevenue}>{money(item.revenue)}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.noItemsText}>No order item data found for this period.</Text>
+            )}
+          </View>
+
+          {/* Operations Summary */}
+          <View style={styles.operationsCard}>
+            <Text style={styles.operationsTitle}>Store Compliance & Status</Text>
+            <View style={styles.operationRow}>
+              <Text style={styles.operationKey}>Partner Type</Text>
+              <Text style={styles.operationVal}>{kind}</Text>
+            </View>
+            <View style={styles.operationRow}>
+              <Text style={styles.operationKey}>Verification</Text>
+              <Text style={[styles.operationVal, { color: isApproved ? '#16a34a' : '#ca8a04' }]}>
+                {isApproved ? 'Approved Partner' : 'Pending Verification'}
+              </Text>
+            </View>
+            <View style={styles.operationRow}>
+              <Text style={styles.operationKey}>{isShop ? 'Store Category' : 'Category / Cuisine'}</Text>
+              <Text style={styles.operationVal}>
+                {isShop ? (session.user.category || 'Retail / Grocery') : (session.user.cuisine || 'Multi-cuisine')}
+              </Text>
+            </View>
+            {!!session.user.gsnNumber && (
+              <View style={styles.operationRow}>
+                <Text style={styles.operationKey}>GST / GSN</Text>
+                <Text style={styles.operationVal}>{session.user.gsnNumber}</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Done Button */}
+          <Pressable onPress={onClose} style={styles.reportDoneButton}>
+            <Text style={styles.reportDoneText}>Done</Text>
+          </Pressable>
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   app: { flex: 1, backgroundColor: '#fffaf5' },
   flex: { flex: 1 },
@@ -1652,4 +2055,419 @@ const styles = StyleSheet.create({
   tabIcon: { color: '#9a8e84', fontSize: 18, height: 22 },
   tabLabel: { color: '#8d8178', fontSize: 10, fontWeight: '600' },
   activeTab: { color: '#d83a32', fontWeight: '800' },
+  overviewCardBtn: {
+    backgroundColor: '#fff7ed',
+    borderWidth: 1.5,
+    borderColor: '#fed7aa',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 14,
+  },
+  overviewCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  overviewIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#ffedd5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  overviewIcon: {
+    fontSize: 20,
+  },
+  overviewCardEyebrow: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#ea580c',
+    letterSpacing: 0.8,
+  },
+  overviewCardTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#431407',
+  },
+  overviewCardSubtitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#9a3412',
+    marginTop: 1,
+  },
+  overviewChevron: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#ea580c',
+  },
+  overviewQuickMetrics: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#fed7aa',
+  },
+  overviewQuickMetric: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    padding: 8,
+    alignItems: 'center',
+  },
+  overviewQuickValue: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#c2410c',
+  },
+  overviewQuickLabel: {
+    fontSize: 10,
+    color: '#7c2d12',
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  overviewCardFooter: {
+    marginTop: 10,
+    alignItems: 'center',
+  },
+  overviewCardFooterText: {
+    fontSize: 11,
+    color: '#c2410c',
+    fontWeight: '700',
+  },
+  reportModalContainer: {
+    flex: 1,
+    backgroundColor: '#fffaf5',
+    paddingTop: Platform.OS === 'android' ? 24 : 44,
+  },
+  reportModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3e8df',
+  },
+  reportEyebrow: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#d83a32',
+    letterSpacing: 1.1,
+  },
+  reportMainTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#2d2621',
+    letterSpacing: -0.5,
+  },
+  reportSubTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#8c7e75',
+    marginTop: 2,
+  },
+  reportCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reportCloseText: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#4b5563',
+    lineHeight: 22,
+  },
+  reportScroll: {
+    flex: 1,
+  },
+  reportContent: {
+    padding: 16,
+    paddingBottom: 40,
+  },
+  reportStoreCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#eee5dd',
+    marginBottom: 14,
+  },
+  reportStoreTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  reportStoreName: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#302923',
+  },
+  reportStoreId: {
+    fontSize: 11,
+    color: '#8c7e75',
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  reportStatusBadge: {
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  reportStatusBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  reportStoreAddress: {
+    fontSize: 11,
+    color: '#6e5f56',
+    marginTop: 8,
+    lineHeight: 16,
+  },
+  reportStoreDigipin: {
+    fontSize: 11,
+    color: '#0284c7',
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  periodRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 16,
+  },
+  periodChip: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  periodChipActive: {
+    backgroundColor: '#d83a32',
+    borderColor: '#d83a32',
+  },
+  periodChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4b5563',
+  },
+  periodChipTextActive: {
+    color: '#ffffff',
+  },
+  sectionHeaderTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#302923',
+    marginBottom: 8,
+    marginTop: 6,
+  },
+  kpiGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+  },
+  kpiCard: {
+    width: '48.5%',
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 12,
+  },
+  kpiLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6e5f56',
+  },
+  kpiValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  kpiSubhint: {
+    fontSize: 10,
+    color: '#8c7e75',
+    marginTop: 2,
+  },
+  funnelCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#eee5dd',
+    padding: 14,
+    marginBottom: 16,
+  },
+  funnelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+  },
+  funnelDotAndLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  funnelDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  funnelLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#374151',
+  },
+  funnelValue: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  funnelDivider: {
+    height: 1,
+    backgroundColor: '#f3f4f6',
+  },
+  paymentCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#eee5dd',
+    padding: 14,
+    flexDirection: 'row',
+    marginBottom: 16,
+  },
+  paymentItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  paymentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  paymentEmoji: {
+    fontSize: 16,
+  },
+  paymentType: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6e5f56',
+  },
+  paymentAmount: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#16a34a',
+    marginTop: 4,
+  },
+  paymentSubtext: {
+    fontSize: 10,
+    color: '#9ca3af',
+    marginTop: 2,
+  },
+  paymentVerticalDivider: {
+    width: 1,
+    backgroundColor: '#f3f4f6',
+    marginHorizontal: 12,
+  },
+  topItemsCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#eee5dd',
+    padding: 14,
+    marginBottom: 16,
+  },
+  topItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+  },
+  topItemDivider: {
+    borderTopWidth: 1,
+    borderTopColor: '#f3f4f6',
+  },
+  topItemRankBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#fff0eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topItemRankText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#d83a32',
+  },
+  topItemName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1f2937',
+  },
+  topItemQty: {
+    fontSize: 10,
+    color: '#6b7280',
+    marginTop: 1,
+  },
+  topItemRevenue: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#15803d',
+  },
+  noItemsText: {
+    fontSize: 12,
+    color: '#9ca3af',
+    textAlign: 'center',
+    paddingVertical: 10,
+  },
+  operationsCard: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    padding: 14,
+    marginBottom: 16,
+  },
+  operationsTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  operationRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  operationKey: {
+    fontSize: 11,
+    color: '#6b7280',
+  },
+  operationVal: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1f2937',
+  },
+  reportDoneButton: {
+    backgroundColor: '#d83a32',
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  reportDoneText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
 });

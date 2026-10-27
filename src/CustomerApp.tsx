@@ -1760,7 +1760,9 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       setCouponValidation(null);
       setBills((current) => {
         const next = { ...current };
-        delete next[result.order._id];
+        if (result?.order?._id) {
+          delete next[result.order._id];
+        }
         return next;
       });
       setTab('orders');
@@ -1776,7 +1778,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
               : `Net Banking (${paymentDetails.bankName || selectedBank})`;
       Alert.alert(
         paymentDetails.paymentStatus === 'paid' ? 'Payment Confirmed & Order Placed' : 'Order Placed',
-        `${result.order.orderNumber || 'Your order'} has been placed with ${selectedStore?.name || 'Tomato'}${validatedCouponCode ? ` using coupon ${validatedCouponCode}` : ''}.\n\nPayment Mode: ${paymentLabel}\nStatus: ${paymentDetails.paymentStatus.toUpperCase()}\nTransaction ID: ${paymentDetails.paymentTransactionId}`,
+        `${result?.order?.orderNumber || 'Your order'} has been placed with ${selectedStore?.name || 'Tomato'}${validatedCouponCode ? ` using coupon ${validatedCouponCode}` : ''}.\n\nPayment Mode: ${paymentLabel}\nStatus: ${paymentDetails.paymentStatus.toUpperCase()}\nTransaction ID: ${paymentDetails.paymentTransactionId}`,
       );
     } catch (reason) {
       setError(getErrorMessage(reason));
@@ -2937,7 +2939,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                 <TextInput
                   autoCapitalize="characters"
                   onChangeText={(value) => setAddressForm((form) => ({ ...form, digipin: value.toUpperCase() }))}
-                  placeholder="Delivery DIGIPIN (e.g. 4M8-9K2-X1P9)"
+                  placeholder="Delivery DIGIPIN (e.g. 4M8-9K2-T3P9)"
                   style={styles.input}
                   value={addressForm.digipin}
                 />

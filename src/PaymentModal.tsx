@@ -200,8 +200,8 @@ export default function PaymentModal({
       const result = generateRazorpayPaymentResult({
         orderId,
         method: method === 'razorpay' ? razorpayTab : (method as 'upi' | 'card' | 'netbanking'),
-        cardLast4: cardForm.number.slice(-4) || '4242',
-        vpa: upiOption === 'id' ? upiId.trim() : `${selectedUpiApp.toLowerCase()}@upi`,
+        cardLast4: cardForm?.number ? cardForm.number.slice(-4) : '4242',
+        vpa: upiOption === 'id' ? upiId.trim() : `${(selectedUpiApp || 'pay').toLowerCase().replace(/\s+/g, '')}@upi`,
         bank,
       });
 

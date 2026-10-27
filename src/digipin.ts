@@ -114,3 +114,45 @@ export async function openMapplsMap(digipin?: string): Promise<void> {
   }
 }
 
+/**
+ * Navigates to a delivery destination prioritizing DIGIPIN, and falling back to GPS coordinates.
+ */
+export async function openNavigationTarget({
+  digipin,
+  lat,
+  lng,
+  address,
+}: {
+  digipin?: string;
+  lat?: number;
+  lng?: number;
+  address?: string;
+}): Promise<void> {
+  const cleanDigipin = normalizeDigipin(digipin);
+  if (cleanDigipin && isValidDigipin(cleanDigipin)) {
+    // 1st Priority: Customer / Partner DIGIPIN via Mappls
+    await openMapplsMap(cleanDigipin);
+    return;
+  }
+
+  if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
+    // 2nd Priority: GPS Coordinates set/shared by customer
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+    try {
+      await Linking.openURL(url);
+      return;
+    } catch {
+      // fallback
+    }
+  }
+
+  if (address?.trim()) {
+    const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address.trim())}`;
+    try {
+      await Linking.openURL(url);
+    } catch {
+      // ignore
+    }
+  }
+}
+

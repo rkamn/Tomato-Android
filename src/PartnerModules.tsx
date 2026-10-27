@@ -88,6 +88,32 @@ function InfoLine({ label, value }: { label: string; value: string }) {
   );
 }
 
+function getCouponSummaryList(summary: Record<string, unknown>, coupons: Coupon[]) {
+  const summaryMap: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(summary || {})) {
+    const norm = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+    summaryMap[norm] = v;
+  }
+
+  const total = summaryMap.totalcoupons ?? summaryMap.total ?? coupons.length;
+  const active = summaryMap.activecoupons ?? summaryMap.active ?? coupons.filter((c) => c.isActive !== false).length;
+  const inactive = summaryMap.inactivecoupons ?? summaryMap.inactive ?? coupons.filter((c) => c.isActive === false).length;
+  const redemptions =
+    summaryMap.totalredemptions ??
+    summaryMap.redemptions ??
+    coupons.reduce(
+      (sum, c) => sum + Number((c as any).usedCount || (c as any).totalUsage || (c as any).redemptions || 0),
+      0,
+    );
+
+  return [
+    { key: 'total', label: 'Total', value: String(total ?? 0) },
+    { key: 'active', label: 'Active', value: String(active ?? 0) },
+    { key: 'inactive', label: 'InActive', value: String(inactive ?? 0) },
+    { key: 'redeemed', label: 'Redeemed', value: String(redemptions ?? 0) },
+  ];
+}
+
 export default function PartnerModules({
   session,
   partnerRole,
@@ -110,6 +136,7 @@ export default function PartnerModules({
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [transfers, setTransfers] = useState<FinanceTransfer[]>([]);
   const [couponSummary, setCouponSummary] = useState<Record<string, unknown>>({});
+  const [createFormVisible, setCreateFormVisible] = useState(false);
   const [couponForm, setCouponForm] = useState({
     code: '',
     title: '',
@@ -273,6 +300,7 @@ export default function PartnerModules({
 
   function startEditCoupon(coupon: Coupon) {
     setEditingCouponId(coupon._id);
+    setCreateFormVisible(true);
     setCouponForm({
       code: coupon.code || '',
       title: coupon.title || '',
@@ -347,6 +375,7 @@ export default function PartnerModules({
         },
       );
       setEditingCouponId('');
+      setCreateFormVisible(false);
       setCouponForm({
         code: '',
         title: '',
@@ -422,7 +451,7 @@ export default function PartnerModules({
     <View style={styles.content}>
       <Text style={styles.eyebrow}>{kind.toUpperCase()} WORKSPACE</Text>
       <Text style={styles.title}>
-        {section === 'coupons' ? 'Your coupons' : section === 'finance' ? 'Finance' : 'Profile & bank details'}
+        {section === 'coupons' ? 'Your Coupons' : section === 'finance' ? 'Finance' : 'Profile & bank details'}
       </Text>
       {!!error && <Text style={styles.error}>{error}</Text>}
       {loading ? <ActivityIndicator color="#d83a32" style={styles.loader} /> : (
@@ -430,32 +459,58 @@ export default function PartnerModules({
           {section === 'coupons' && (
             <View>
               <View style={styles.metrics}>
-                {Object.entries(couponSummary).slice(0, 4).map(([key, value]) => (
-                  <View key={key} style={styles.metric}>
-                    <Text style={styles.metricValue}>{String(value ?? 0)}</Text>
-                    <Text style={styles.metricLabel}>{key.replaceAll('_', ' ')}</Text>
+                {getCouponSummaryList(couponSummary, coupons).map((metric) => (
+                  <View key={metric.key} style={styles.metric}>
+                    <Text style={styles.metricValue}>{metric.value}</Text>
+                    <Text style={[styles.metricLabel, styles.metricLabelPlain]}>{metric.label}</Text>
                   </View>
                 ))}
               </View>
               <View style={styles.card}>
-                <Text style={styles.cardTitle}>{editingCouponId ? 'Edit coupon' : 'Create a coupon'}</Text>
-                <TextInput style={styles.input} placeholder="Coupon code" autoCapitalize="characters" value={couponForm.code} onChangeText={(value) => setCouponForm((current) => ({ ...current, code: value }))} />
-                <TextInput style={styles.input} placeholder="Title" value={couponForm.title} onChangeText={(value) => setCouponForm((current) => ({ ...current, title: value }))} />
-                <TextInput style={styles.input} placeholder="Description" value={couponForm.description} onChangeText={(value) => setCouponForm((current) => ({ ...current, description: value }))} />
-                <TextInput style={styles.input} placeholder="Discount type (percentage or fixed)" autoCapitalize="none" value={couponForm.discountType} onChangeText={(value) => setCouponForm((current) => ({ ...current, discountType: value }))} />
-                <TextInput style={styles.input} placeholder="Discount value" keyboardType="decimal-pad" value={couponForm.discountValue} onChangeText={(value) => setCouponForm((current) => ({ ...current, discountValue: value }))} />
-                <TextInput style={styles.input} placeholder="Minimum order (optional)" keyboardType="decimal-pad" value={couponForm.minOrderAmount} onChangeText={(value) => setCouponForm((current) => ({ ...current, minOrderAmount: value }))} />
-                <TextInput style={styles.input} placeholder="Maximum discount (optional)" keyboardType="decimal-pad" value={couponForm.maxDiscountAmount} onChangeText={(value) => setCouponForm((current) => ({ ...current, maxDiscountAmount: value }))} />
-                <TextInput style={styles.input} placeholder="Target item category (optional)" value={couponForm.targetItemCategory} onChangeText={(value) => setCouponForm((current) => ({ ...current, targetItemCategory: value }))} />
-                <TextInput style={styles.input} placeholder="Occasion name (optional)" value={couponForm.occasionName} onChangeText={(value) => setCouponForm((current) => ({ ...current, occasionName: value }))} />
-                <TextInput style={styles.input} placeholder="Per-user usage limit (optional)" keyboardType="number-pad" value={couponForm.usageLimitPerUser} onChangeText={(value) => setCouponForm((current) => ({ ...current, usageLimitPerUser: value }))} />
-                <TextInput style={styles.input} placeholder="Total usage limit (optional)" keyboardType="number-pad" value={couponForm.totalUsageLimit} onChangeText={(value) => setCouponForm((current) => ({ ...current, totalUsageLimit: value }))} />
-                <TextInput style={styles.input} placeholder="Valid from (ISO date)" value={couponForm.validFrom} onChangeText={(value) => setCouponForm((current) => ({ ...current, validFrom: value }))} />
-                <TextInput style={styles.input} placeholder="Valid until (ISO date)" value={couponForm.validUntil} onChangeText={(value) => setCouponForm((current) => ({ ...current, validUntil: value }))} />
-                <Pressable disabled={busy === 'coupon'} style={styles.primaryButton} onPress={() => void saveCoupon()}>
-                  <Text style={styles.primaryText}>{busy === 'coupon' ? 'Saving…' : editingCouponId ? 'Save changes' : 'Create coupon'}</Text>
+                <Pressable
+                  onPress={() => setCreateFormVisible((prev) => !prev)}
+                  style={[styles.couponCreateHeaderRow, !createFormVisible && { marginBottom: 0 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={createFormVisible ? 'Collapse create coupon form' : 'Expand create coupon form'}
+                >
+                  <Text style={[styles.cardTitle, { marginBottom: 0 }]}>
+                    {editingCouponId ? 'Edit coupon' : 'Create a coupon'}
+                  </Text>
+                  <View style={styles.expandIconButton}>
+                    <Text style={styles.expandIconText}>{createFormVisible ? '−' : '+'}</Text>
+                  </View>
                 </Pressable>
-                {!!editingCouponId && <Pressable style={styles.secondaryButton} onPress={() => setEditingCouponId('')}><Text style={styles.secondaryText}>Cancel edit</Text></Pressable>}
+                {createFormVisible && (
+                  <>
+                    <TextInput style={styles.input} placeholder="Coupon code" autoCapitalize="characters" value={couponForm.code} onChangeText={(value) => setCouponForm((current) => ({ ...current, code: value }))} />
+                    <TextInput style={styles.input} placeholder="Title" value={couponForm.title} onChangeText={(value) => setCouponForm((current) => ({ ...current, title: value }))} />
+                    <TextInput style={styles.input} placeholder="Description" value={couponForm.description} onChangeText={(value) => setCouponForm((current) => ({ ...current, description: value }))} />
+                    <TextInput style={styles.input} placeholder="Discount type (percentage or fixed)" autoCapitalize="none" value={couponForm.discountType} onChangeText={(value) => setCouponForm((current) => ({ ...current, discountType: value }))} />
+                    <TextInput style={styles.input} placeholder="Discount value" keyboardType="decimal-pad" value={couponForm.discountValue} onChangeText={(value) => setCouponForm((current) => ({ ...current, discountValue: value }))} />
+                    <TextInput style={styles.input} placeholder="Minimum order (optional)" keyboardType="decimal-pad" value={couponForm.minOrderAmount} onChangeText={(value) => setCouponForm((current) => ({ ...current, minOrderAmount: value }))} />
+                    <TextInput style={styles.input} placeholder="Maximum discount (optional)" keyboardType="decimal-pad" value={couponForm.maxDiscountAmount} onChangeText={(value) => setCouponForm((current) => ({ ...current, maxDiscountAmount: value }))} />
+                    <TextInput style={styles.input} placeholder="Target item category (optional)" value={couponForm.targetItemCategory} onChangeText={(value) => setCouponForm((current) => ({ ...current, targetItemCategory: value }))} />
+                    <TextInput style={styles.input} placeholder="Occasion name (optional)" value={couponForm.occasionName} onChangeText={(value) => setCouponForm((current) => ({ ...current, occasionName: value }))} />
+                    <TextInput style={styles.input} placeholder="Per-user usage limit (optional)" keyboardType="number-pad" value={couponForm.usageLimitPerUser} onChangeText={(value) => setCouponForm((current) => ({ ...current, usageLimitPerUser: value }))} />
+                    <TextInput style={styles.input} placeholder="Total usage limit (optional)" keyboardType="number-pad" value={couponForm.totalUsageLimit} onChangeText={(value) => setCouponForm((current) => ({ ...current, totalUsageLimit: value }))} />
+                    <TextInput style={styles.input} placeholder="Valid from (ISO date)" value={couponForm.validFrom} onChangeText={(value) => setCouponForm((current) => ({ ...current, validFrom: value }))} />
+                    <TextInput style={styles.input} placeholder="Valid until (ISO date)" value={couponForm.validUntil} onChangeText={(value) => setCouponForm((current) => ({ ...current, validUntil: value }))} />
+                    <Pressable disabled={busy === 'coupon'} style={styles.primaryButton} onPress={() => void saveCoupon()}>
+                      <Text style={styles.primaryText}>{busy === 'coupon' ? 'Saving…' : editingCouponId ? 'Save changes' : 'Create coupon'}</Text>
+                    </Pressable>
+                    {!!editingCouponId && (
+                      <Pressable
+                        style={styles.secondaryButton}
+                        onPress={() => {
+                          setEditingCouponId('');
+                          setCreateFormVisible(false);
+                        }}
+                      >
+                        <Text style={styles.secondaryText}>Cancel edit</Text>
+                      </Pressable>
+                    )}
+                  </>
+                )}
               </View>
               {coupons.map((coupon) => (
                 <View key={coupon._id} style={styles.card}>
@@ -585,6 +640,29 @@ const styles = StyleSheet.create({
   title: { color: '#2d2621', fontSize: 23, fontWeight: '800', marginTop: 4, marginBottom: 10 },
   card: { backgroundColor: '#fff', borderColor: '#eee5dd', borderWidth: 1, borderRadius: 15, padding: 14, marginBottom: 11 },
   cardTitle: { color: '#302923', fontSize: 14, fontWeight: '800', marginBottom: 5 },
+  couponCreateHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+    marginBottom: 8,
+  },
+  expandIconButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#fff0eb',
+    borderWidth: 1,
+    borderColor: '#fcdcd5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  expandIconText: {
+    color: '#d83a32',
+    fontSize: 18,
+    fontWeight: '700',
+    lineHeight: 20,
+  },
   input: { minHeight: 42, borderColor: '#eee3da', borderWidth: 1, backgroundColor: '#fffaf7', borderRadius: 10, paddingHorizontal: 11, color: '#302923', fontSize: 12, marginTop: 8 },
   muted: { color: '#82786f', fontSize: 12, lineHeight: 18, marginTop: 4 },
   error: { color: '#b42318', backgroundColor: '#fff1f0', padding: 10, borderRadius: 9, marginBottom: 8 },
@@ -593,6 +671,7 @@ const styles = StyleSheet.create({
   metric: { flex: 1, borderRadius: 12, backgroundColor: '#fff', borderColor: '#eee5dd', borderWidth: 1, padding: 12 },
   metricValue: { color: '#d83a32', fontSize: 18, fontWeight: '800' },
   metricLabel: { color: '#766d68', fontSize: 10, marginTop: 4, textTransform: 'capitalize' },
+  metricLabelPlain: { textTransform: 'none' },
   primaryButton: { minHeight: 40, justifyContent: 'center', alignItems: 'center', backgroundColor: '#d83a32', borderRadius: 10, paddingHorizontal: 12, marginTop: 10 },
   primaryText: { color: '#fff', fontWeight: '800', fontSize: 12 },
   secondaryButton: { minHeight: 36, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff1ed', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 8, marginTop: 7 },

@@ -16,8 +16,10 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import { apiRequest } from './api';
-import { formatDigipin } from './digipin';
+import { formatDigipin, isValidDigipin, openMapplsMap, openNavigationTarget } from './digipin';
+import GlobalHeader from './GlobalHeader';
 import ProfileAccess from './ProfileAccess';
+import SignOutModal from './SignOutModal';
 import type { Order, Session, User } from './types';
 
 type RiderTab = 'available' | 'active' | 'history' | 'account';
@@ -81,6 +83,36 @@ function openMap(address: string) {
   void Linking.openURL(url).catch(() => Alert.alert('Unable to open maps', 'Install a map application and try again.'));
 }
 
+async function navigateToCustomer(order: Order) {
+  const digipin = order.deliveryAddress?.digipin;
+  const coords = order.deliveryAddress?.coordinates
+    || (order.deliveryAddress as unknown as { location?: { coordinates?: number[] } })?.location?.coordinates;
+  const lng = Array.isArray(coords) && coords.length >= 2 ? coords[0] : undefined;
+  const lat = Array.isArray(coords) && coords.length >= 2 ? coords[1] : undefined;
+  const dropAddress = destination(order, false);
+
+  // 1st Priority: Customer DIGIPIN
+  // 2nd Priority (if DIGIPIN not set): Customer GPS Location
+  // Fallback: Street Address Text
+  await openNavigationTarget({
+    digipin,
+    lat,
+    lng,
+    address: dropAddress,
+  });
+}
+
+async function navigateToPickup(order: Order) {
+  const digipin = order.pickupDigipin || order.restaurantDigipin || order.shopDigipin;
+  const pickupAddress = destination(order, true);
+
+  // Shop / Restaurant pickup uses DIGIPIN
+  await openNavigationTarget({
+    digipin,
+    address: pickupAddress,
+  });
+}
+
 export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Props) {
   const [tab, setTab] = useState<RiderTab>('available');
   const [isOnline, setIsOnline] = useState(
@@ -109,6 +141,9 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
   const [refreshing, setRefreshing] = useState(false);
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [signOutModalVisible, setSignOutModalVisible] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
   const isApproved = session.user.isApproved !== false;
   const knownOfferStatuses = useRef<Map<string, string> | null>(null);
 
@@ -281,8 +316,9 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
   useEffect(() => {
     if (!isOnline || !isApproved) return;
     let disposed = false;
+    let locationWatcher: Location.LocationSubscription | null = null;
 
-    async function updateForegroundLocation() {
+    async function startLiveGpsTracking() {
       try {
         if (AppState.currentState !== 'active') return;
         let permission = await Location.getForegroundPermissionsAsync();
@@ -291,33 +327,63 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
         }
         if (!permission.granted) {
           if (!disposed) {
-            setError('Location permission is needed to share your live rider location while you are on duty.');
+            setError('Location permission is needed for live GPS tracking while on duty.');
           }
           return;
         }
+
+        // Fetch initial high-accuracy position immediately
         const position = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
+          accuracy: Location.Accuracy.High,
         });
-        if (disposed) return;
-        const currentLocation = {
-          lat: Number(position.coords.latitude.toFixed(6)),
-          lng: Number(position.coords.longitude.toFixed(6)),
-        };
-        await apiRequest('/api/rider/location', session.token, {
-          method: 'PUT',
-          body: JSON.stringify({ ...currentLocation, isOnline: true }),
-        });
-        if (!disposed) setLocation((previous) => ({ ...previous, currentLocation, isOnline: true }));
+        if (!disposed && position?.coords) {
+          const currentLocation = {
+            lat: Number(position.coords.latitude.toFixed(6)),
+            lng: Number(position.coords.longitude.toFixed(6)),
+            speed: position.coords.speed ?? 0,
+            heading: position.coords.heading ?? 0,
+          };
+          setLocation((previous) => ({ ...previous, currentLocation, isOnline: true }));
+          void apiRequest('/api/rider/location', session.token, {
+            method: 'PUT',
+            body: JSON.stringify({ ...currentLocation, isOnline: true }),
+          }).catch(() => null);
+        }
+
+        // Start real-time live GPS stream (every 4s or 5m moved)
+        locationWatcher = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 4000,
+            distanceInterval: 5,
+          },
+          (pos) => {
+            if (disposed || !pos?.coords) return;
+            const liveLoc = {
+              lat: Number(pos.coords.latitude.toFixed(6)),
+              lng: Number(pos.coords.longitude.toFixed(6)),
+              speed: pos.coords.speed ?? 0,
+              heading: pos.coords.heading ?? 0,
+            };
+            setLocation((previous) => ({ ...previous, currentLocation: liveLoc, isOnline: true }));
+            void apiRequest('/api/rider/location', session.token, {
+              method: 'PUT',
+              body: JSON.stringify({ ...liveLoc, isOnline: true }),
+            }).catch(() => null);
+          },
+        );
       } catch (reason) {
         if (!disposed) setError(readableError(reason));
       }
     }
 
-    void updateForegroundLocation();
-    const interval = setInterval(() => void updateForegroundLocation(), 60_000);
+    void startLiveGpsTracking();
+
     return () => {
       disposed = true;
-      clearInterval(interval);
+      if (locationWatcher) {
+        locationWatcher.remove();
+      }
     };
   }, [isOnline, isApproved, session.token]);
 
@@ -434,28 +500,26 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
   }
 
   function signOut() {
-    Alert.alert('Sign out?', 'You can sign back in any time.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign out',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            if (isOnline) {
-              await apiRequest('/api/rider/status', session.token, {
-                method: 'PUT',
-                body: JSON.stringify({ isOnline: false }),
-              });
-            }
-            await apiRequest('/api/auth/logout', session.token, { method: 'POST' });
-          } catch (reason) {
-            Alert.alert('Unable to finish sign out', readableError(reason));
-          } finally {
-            await onSignOut();
-          }
-        },
-      },
-    ]);
+    setSignOutModalVisible(true);
+  }
+
+  async function performSignOut() {
+    setIsSigningOut(true);
+    try {
+      if (isOnline) {
+        await apiRequest('/api/rider/status', session.token, {
+          method: 'PUT',
+          body: JSON.stringify({ isOnline: false }),
+        });
+      }
+      await apiRequest('/api/auth/logout', session.token, { method: 'POST' });
+    } catch (reason) {
+      Alert.alert('Unable to finish sign out', readableError(reason));
+    } finally {
+      setIsSigningOut(false);
+      setSignOutModalVisible(false);
+      await onSignOut();
+    }
   }
 
   async function refresh() {
@@ -482,31 +546,31 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
 
   return (
     <View style={styles.app}>
-      <View style={styles.header}>
-        <Pressable accessibilityLabel="Go to home screen" onPress={() => setTab('available')} style={styles.flex}>
-          <Text style={styles.brand}>🍅 Tomato</Text>
-          <Text style={styles.role}>Delivery partner</Text>
-        </Pressable>
-        <Pressable onPress={() => void showNotifications()} style={styles.iconButton}>
-          <Text style={styles.iconText}>♢</Text>
-        </Pressable>
-        <Pressable onPress={() => void refresh()} style={styles.iconButton}>
-          <Text style={styles.iconText}>↻</Text>
-        </Pressable>
-        <ProfileAccess
-          session={session}
-          roleLabel="Delivery partner"
-          items={[
-            { key: 'available', label: 'Available deliveries', description: 'See orders in your service area', icon: '⌕' },
-            { key: 'active', label: 'My deliveries', description: 'Open your current delivery route', icon: '➤' },
-            { key: 'history', label: 'Earnings & history', description: 'Review completed deliveries and earnings', icon: '₹' },
-            { key: 'account', label: 'Account & payouts', description: 'Manage rider details and payout information', icon: '⚙' },
-          ]}
-          onNavigate={(key) => setTab(key as RiderTab)}
-          onSignOut={signOut}
-          onSessionUserUpdate={onSessionUserUpdate}
-        />
-      </View>
+      <GlobalHeader
+        session={session}
+        onBrandPress={() => setTab('available')}
+        searchQuery={search}
+        onSearchChange={(text) => setSearch(text)}
+        searchPlaceholder="Search deliveries, addresses…"
+        addressText="Rider Service Area"
+        pincode={session.user.pincode || 'Active Grid'}
+        onNotificationPress={() => void showNotifications()}
+        rightActions={
+          <Pressable onPress={() => void refresh()} style={styles.iconButton}>
+            <Text style={styles.iconText}>↻</Text>
+          </Pressable>
+        }
+        roleLabel="Delivery partner"
+        profileMenuItems={[
+          { key: 'available', label: 'Available deliveries', description: 'See orders in your service area', icon: '⌕' },
+          { key: 'active', label: 'My deliveries', description: 'Open your current delivery route', icon: '➤' },
+          { key: 'history', label: 'Earnings & history', description: 'Review completed deliveries and earnings', icon: '₹' },
+          { key: 'account', label: 'Account & payouts', description: 'Manage rider details and payout information', icon: '⚙' },
+        ]}
+        onNavigateProfile={(key) => setTab(key as RiderTab)}
+        onSignOut={performSignOut}
+        onSessionUserUpdate={onSessionUserUpdate}
+      />
       {!!error && (
         <Pressable onPress={() => setError('')} style={styles.errorBanner}>
           <Text style={styles.errorText}>{error}</Text><Text style={styles.dismiss}>×</Text>
@@ -635,11 +699,14 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
             )}
             {location?.currentLocation && (
               <View style={styles.locationCard}>
-                <Text style={styles.cardTitle}>Last shared location</Text>
+                <View style={styles.liveTrackingHeader}>
+                  <Text style={styles.livePulseDot}>🟢</Text>
+                  <Text style={styles.cardTitle}>Live GPS Tracking Active</Text>
+                </View>
                 <Text style={styles.muted}>
-                  {location.currentLocation.lat?.toFixed(5)}, {location.currentLocation.lng?.toFixed(5)}
+                  Rider GPS: {location.currentLocation.lat?.toFixed(5)}, {location.currentLocation.lng?.toFixed(5)}
                 </Text>
-                <Text style={styles.locationFoot}>Updated while Tomato is open and you are online.</Text>
+                <Text style={styles.locationFoot}>Live GPS coordinates are actively streamed for customer and store tracking.</Text>
               </View>
             )}
             <View style={styles.collectionCard}>
@@ -710,6 +777,12 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
           </Pressable>
         ))}
       </View>
+      <SignOutModal
+        visible={signOutModalVisible}
+        onClose={() => setSignOutModalVisible(false)}
+        onConfirm={performSignOut}
+        isLoading={isSigningOut}
+      />
     </View>
   );
 }
@@ -751,6 +824,15 @@ function RiderOrderCard({
   const pickupAddress = destination(order, true);
   const dropAddress = destination(order, false);
 
+  const pickupDigipin = order.pickupDigipin || order.restaurantDigipin || order.shopDigipin;
+  const customerDigipin = order.deliveryAddress?.digipin;
+  const customerCoords = order.deliveryAddress?.coordinates
+    || (order.deliveryAddress as unknown as { location?: { coordinates?: number[] } })?.location?.coordinates;
+  const hasCustomerDigipin = Boolean(customerDigipin && isValidDigipin(customerDigipin));
+  const hasCustomerGps = Array.isArray(customerCoords) && customerCoords.length >= 2 && !isNaN(customerCoords[0]) && !isNaN(customerCoords[1]);
+  const customerGpsLng = hasCustomerGps ? customerCoords[0] : undefined;
+  const customerGpsLat = hasCustomerGps ? customerCoords[1] : undefined;
+
   return (
     <View style={styles.orderCard}>
       <View style={styles.orderHeader}>
@@ -773,13 +855,20 @@ function RiderOrderCard({
           <Text style={styles.routeLabel}>PICKUP {order.shopName ? 'SHOP' : 'RESTAURANT'}</Text>
           <Text style={styles.routeName}>{order.shopName || order.restaurantName || 'Tomato partner'}</Text>
           <Text style={styles.muted}>{pickupAddress}</Text>
-          {!!(order.pickupDigipin || order.restaurantDigipin || order.shopDigipin) && (
-            <Text style={styles.phone}>⌖ DIGIPIN: {formatDigipin(order.pickupDigipin || order.restaurantDigipin || order.shopDigipin)}</Text>
+          {!!pickupDigipin && (
+            <View style={styles.routingTargetBadgeDigipin}>
+              <Text style={styles.routingTargetTextDigipin}>⌖ Pickup DIGIPIN: {formatDigipin(pickupDigipin)}</Text>
+            </View>
           )}
         </View>
         {mode !== 'history' && (
-          <Pressable onPress={() => openMap(pickupAddress)} style={styles.mapButton}>
-            <Text style={styles.mapText}>Map</Text>
+          <Pressable
+            onPress={() => void navigateToPickup(order)}
+            style={pickupDigipin ? styles.mapButtonDigipin : styles.mapButton}
+          >
+            <Text style={pickupDigipin ? styles.mapTextDigipin : styles.mapText}>
+              {pickupDigipin ? 'DIGIPIN' : 'Map'}
+            </Text>
           </Pressable>
         )}
       </View>
@@ -790,20 +879,49 @@ function RiderOrderCard({
           <Text style={styles.routeLabel}>CUSTOMER DROP</Text>
           <Text style={styles.routeName}>{order.customerName || 'Tomato customer'}</Text>
           <Text style={styles.muted}>{dropAddress || 'Delivery address unavailable'}</Text>
-          {!!order.deliveryAddress?.digipin && (
-            <Text style={styles.phone}>⌖ DIGIPIN: {formatDigipin(order.deliveryAddress.digipin)}</Text>
+          
+          {hasCustomerDigipin ? (
+            <View style={styles.routingTargetBadgeDigipin}>
+              <Text style={styles.routingTargetTextDigipin}>
+                ⌖ Deliver to DIGIPIN: {formatDigipin(customerDigipin)}
+              </Text>
+            </View>
+          ) : hasCustomerGps ? (
+            <View style={styles.routingTargetBadgeGps}>
+              <Text style={styles.routingTargetTextGps}>
+                📍 Deliver to Customer GPS: {customerGpsLat?.toFixed(5)}, {customerGpsLng?.toFixed(5)}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.phone}>Text address fallback</Text>
           )}
+
           {!!phone && <Text style={styles.phone}>{phone}</Text>}
         </View>
         {mode !== 'history' && (
-          <Pressable onPress={() => openMap(dropAddress)} style={styles.mapButton}>
-            <Text style={styles.mapText}>Map</Text>
+          <Pressable
+            onPress={() => void navigateToCustomer(order)}
+            style={hasCustomerDigipin ? styles.mapButtonDigipin : styles.mapButton}
+          >
+            <Text style={hasCustomerDigipin ? styles.mapTextDigipin : styles.mapText}>
+              {hasCustomerDigipin ? 'DIGIPIN' : hasCustomerGps ? 'GPS Map' : 'Map'}
+            </Text>
           </Pressable>
         )}
       </View>
       {!!items && <Text style={styles.items}>{items}</Text>}
       <Text style={styles.payment}>
-        {order.paymentMethod === 'cod' ? `COLLECT ${amount(order.totalAmount)} CASH / UPI` : `${(order.paymentMethod || 'ONLINE').toUpperCase()} · PAID`}
+        {order.paymentMethod === 'cod' ? (
+          <Text>
+            <Text style={{ color: '#dc2626', fontWeight: '800' }}>COD</Text>
+            {` · COLLECT ${amount(order.totalAmount)} CASH / UPI`}
+          </Text>
+        ) : (
+          <Text>
+            {`${(order.paymentMethod || 'ONLINE').toUpperCase()} · `}
+            <Text style={{ color: '#16a34a', fontWeight: '800' }}>PAID</Text>
+          </Text>
+        )}
       </Text>
       {mode === 'available' && order.status === 'placed' && (
         <Text style={styles.waitingText}>Waiting for the restaurant or shop to accept this order.</Text>
@@ -829,9 +947,9 @@ function RiderOrderCard({
             <>
               <ActionButton
                 disabled={busy}
-                label="Pickup map"
+                label={pickupDigipin ? 'Pickup DIGIPIN' : 'Pickup map'}
                 variant="outline"
-                onPress={() => openMap(pickupAddress)}
+                onPress={() => void navigateToPickup(order)}
               />
               <ActionButton
                 disabled={busy || !online}
@@ -843,9 +961,9 @@ function RiderOrderCard({
             <>
               <ActionButton
                 disabled={busy}
-                label="Customer map"
+                label={hasCustomerDigipin ? 'Customer DIGIPIN' : hasCustomerGps ? 'Customer GPS Map' : 'Customer map'}
                 variant="outline"
-                onPress={() => openMap(dropAddress)}
+                onPress={() => void navigateToCustomer(order)}
               />
               <ActionButton
                 disabled={busy || !online}
@@ -962,6 +1080,18 @@ const styles = StyleSheet.create({
   routeName: { color: '#302923', fontSize: 13, fontWeight: '700', marginTop: 3 },
   mapButton: { borderColor: '#eadfd7', borderWidth: 1, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 9 },
   mapText: { color: '#c8322a', fontSize: 10, fontWeight: '800' },
+  mapButtonDigipin: { borderColor: '#1d4ed8', backgroundColor: '#eff6ff', borderWidth: 1, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 9 },
+  mapTextDigipin: { color: '#1d4ed8', fontSize: 10, fontWeight: '800' },
+  routingTargetBadgeDigipin: { backgroundColor: '#eff6ff', borderColor: '#bfdbfe', borderWidth: 1, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, marginTop: 4, alignSelf: 'flex-start' },
+  routingTargetTextDigipin: { color: '#1d4ed8', fontSize: 10.5, fontWeight: '800' },
+  routingTargetBadgeGps: { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0', borderWidth: 1, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, marginTop: 4, alignSelf: 'flex-start' },
+  routingTargetTextGps: { color: '#166534', fontSize: 10.5, fontWeight: '800' },
+  digipinPillBadge: { backgroundColor: '#eff6ff', borderColor: '#bfdbfe', borderWidth: 1, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, marginTop: 4, alignSelf: 'flex-start' },
+  digipinPillBadgeText: { color: '#1d4ed8', fontSize: 10.5, fontWeight: '800' },
+  gpsPillBadge: { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0', borderWidth: 1, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, marginTop: 4, alignSelf: 'flex-start' },
+  gpsPillBadgeText: { color: '#166534', fontSize: 10.5, fontWeight: '800' },
+  liveTrackingHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  livePulseDot: { fontSize: 12 },
   routeDivider: { height: 1, backgroundColor: '#f0e8e1', marginLeft: 21, marginTop: 11 },
   phone: { color: '#c8322a', fontSize: 11, fontWeight: '700', marginTop: 4 },
   items: { color: '#5d544d', fontSize: 11, lineHeight: 17, marginTop: 12 },

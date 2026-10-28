@@ -758,6 +758,27 @@ export function ProfileSettingsModal({
           {Boolean(error) && <Text style={styles.error}>{error}</Text>}
 
           <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            {/* "Spice Garden" / Shop Partner Account Tile */}
+            {isPartner && (
+              <View style={styles.partnerAccountCard}>
+                <Text style={styles.partnerAccountName}>
+                  {profile.name || session?.user?.name || (session?.user?.role === 'shop' ? 'Shop' : 'Restaurant')}
+                </Text>
+                {!!(profile.email || session?.user?.email) && (
+                  <Text style={styles.partnerAccountMuted}>{profile.email || session?.user?.email}</Text>
+                )}
+                {!!(profile.phone || session?.user?.phone) && (
+                  <Text style={styles.partnerAccountMuted}>{profile.phone || session?.user?.phone}</Text>
+                )}
+                <Text style={styles.partnerAccountRole}>
+                  {(session?.user?.role === 'shop' ? 'SHOP' : 'RESTAURANT')} PARTNER · {accountId}
+                </Text>
+                {session?.user?.isApproved === false && (
+                  <Text style={styles.partnerPendingText}>Awaiting administrator approval</Text>
+                )}
+              </View>
+            )}
+
             {/* Update Profile Photo Row */}
             <View style={styles.profilePhotoSection}>
               <View style={styles.profilePhotoContainer}>
@@ -1572,5 +1593,44 @@ const styles = StyleSheet.create({
     color: '#7c2d12',
     marginTop: 8,
     lineHeight: 16,
+  },
+  partnerAccountCard: {
+    backgroundColor: '#fff',
+    borderColor: '#eee6df',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 18,
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 12,
+  },
+  partnerAccountName: {
+    color: '#302923',
+    fontWeight: '800',
+    fontSize: 18,
+    marginBottom: 4,
+  },
+  partnerAccountMuted: {
+    color: '#82786f',
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  partnerAccountRole: {
+    color: '#c8322a',
+    backgroundColor: '#fff0eb',
+    borderRadius: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    marginTop: 10,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  partnerPendingText: {
+    color: '#9b541f',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 8,
   },
 });

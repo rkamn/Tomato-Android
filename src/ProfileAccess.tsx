@@ -747,7 +747,7 @@ export function ProfileSettingsModal({
           <View style={styles.sheetHeader}>
             <View style={styles.identity}>
               <Text style={styles.sheetTitle} numberOfLines={2}>
-                Account & Profile settings {accountId}
+                Account & Profile settings{isPartner ? '' : ` ${accountId}`}
               </Text>
               <Text style={styles.roleLabel}>Manage your personal details and account credentials.</Text>
             </View>
@@ -761,119 +761,107 @@ export function ProfileSettingsModal({
             {/* "Spice Garden" / Shop Partner Account Tile */}
             {isPartner && (
               <View style={styles.partnerAccountCard}>
-                <Text style={styles.partnerAccountName}>
-                  {profile.name || session?.user?.name || (session?.user?.role === 'shop' ? 'Shop' : 'Restaurant')}
-                </Text>
-                {!!(profile.email || session?.user?.email) && (
-                  <Text style={styles.partnerAccountMuted}>{profile.email || session?.user?.email}</Text>
-                )}
-                {!!(profile.phone || session?.user?.phone) && (
-                  <Text style={styles.partnerAccountMuted}>{profile.phone || session?.user?.phone}</Text>
-                )}
-                <Text style={styles.partnerAccountRole}>
-                  {(session?.user?.role === 'shop' ? 'SHOP' : 'RESTAURANT')} PARTNER · {accountId}
-                </Text>
-                {session?.user?.isApproved === false && (
-                  <Text style={styles.partnerPendingText}>Awaiting administrator approval</Text>
-                )}
-              </View>
-            )}
-
-            {/* Update Profile Photo Row */}
-            <View style={styles.profilePhotoSection}>
-              <View style={styles.profilePhotoContainer}>
-                {profile.photo ? (
-                  <Image source={{ uri: apiPath(profile.photo) }} style={styles.profilePhotoImage} />
-                ) : (
-                  <View style={styles.profilePhotoPlaceholder}>
-                    <Text style={styles.profilePhotoInitial}>
-                      {String(profile.name || session?.user?.name || 'C').charAt(0).toUpperCase()}
-                    </Text>
-                  </View>
-                )}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Update profile photo"
-                  onPress={() => setPhotoModalVisible((curr) => !curr)}
-                  style={styles.profilePhotoBadgeBtn}
-                >
-                  <Text style={styles.profilePhotoBadgeIcon}>📷</Text>
-                </Pressable>
-              </View>
-
-              <View style={styles.profilePhotoMeta}>
-                <Text style={styles.profilePhotoTitle}>{profile.name || 'Tomato Customer'}</Text>
-                <Pressable onPress={() => setPhotoModalVisible((curr) => !curr)} style={styles.updatePhotoTextBtn}>
-                  <Text style={styles.updatePhotoText}>Update profile photo</Text>
-                </Pressable>
-              </View>
-            </View>
-
-            {/* Photo URL / Picker Box */}
-            {photoModalVisible && (
-              <View style={styles.photoPickerBox}>
-                <Text style={styles.photoPickerTitle}>Enter Profile Photo URL:</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="https://example.com/avatar.jpg"
-                  autoCapitalize="none"
-                  value={photoUrlInput || profile.photo}
-                  onChangeText={setPhotoUrlInput}
-                />
-                <View style={styles.photoPickerActions}>
-                  <Pressable
-                    style={styles.photoPickerSaveBtn}
-                    onPress={() => {
-                      if (photoUrlInput.trim()) {
-                        setProfile((c) => ({ ...c, photo: photoUrlInput.trim() }));
-                      }
-                      setPhotoModalVisible(false);
-                    }}
-                  >
-                    <Text style={styles.photoPickerSaveText}>Apply Photo</Text>
-                  </Pressable>
-                  <Pressable
-                    style={styles.photoPickerCancelBtn}
-                    onPress={() => setPhotoModalVisible(false)}
-                  >
-                    <Text style={styles.photoPickerCancelText}>Cancel</Text>
-                  </Pressable>
+                <View style={styles.partnerAvatarCircle}>
+                  <Text style={styles.partnerAvatarText}>
+                    {((profile.name || session?.user?.name || (session?.user?.role === 'shop' ? 'Shop' : 'Restaurant')).trim()).charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+                <View style={styles.partnerAccountInfo}>
+                  <Text style={styles.partnerAccountName}>
+                    {profile.name || session?.user?.name || (session?.user?.role === 'shop' ? 'Shop' : 'Restaurant')}
+                  </Text>
+                  {!!(profile.email || session?.user?.email) && (
+                    <Text style={styles.partnerAccountMuted}>{profile.email || session?.user?.email}</Text>
+                  )}
+                  {!!(profile.phone || session?.user?.phone) && (
+                    <Text style={styles.partnerAccountMuted}>{profile.phone || session?.user?.phone}</Text>
+                  )}
+                  <Text style={styles.partnerAccountRole}>
+                    {(session?.user?.role === 'shop' ? 'SHOP' : 'RESTAURANT')} PARTNER · {accountId}
+                  </Text>
+                  {session?.user?.isApproved === false && (
+                    <Text style={styles.partnerPendingText}>Awaiting administrator approval</Text>
+                  )}
                 </View>
               </View>
             )}
 
-            {/* Account / Restaurant / Shop / Customer ID */}
-            <Text style={styles.fieldLabel}>{accountIdLabel}</Text>
-            <View style={styles.readOnlyField}>
-              <Text style={styles.readOnlyText}>{accountId}</Text>
-              <Text style={styles.readOnlyBadge}>VERIFIED ID</Text>
-            </View>
-
-            {isPartner && (
-              <Pressable
-                style={styles.partnerOverviewCard}
-                onPress={() => {
-                  onClose();
-                  if (onOverviewPress) onOverviewPress();
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Open Overview business and sales report"
-              >
-                <View style={styles.partnerOverviewHeader}>
-                  <Text style={styles.partnerOverviewIcon}>📊</Text>
-                  <View style={styles.flex}>
-                    <Text style={styles.partnerOverviewEyebrow}>BUSINESS ANALYTICS</Text>
-                    <Text style={styles.partnerOverviewTitle}>Overview</Text>
-                    <Text style={styles.partnerOverviewSubtitle}>
-                      {session?.user?.role === 'shop' ? 'Shop Business & Sales Report' : 'Restaurant Business & Sales Report'}
-                    </Text>
+            {/* Update Profile Photo Row (Customers & Riders only) */}
+            {!isPartner && (
+              <>
+                <View style={styles.profilePhotoSection}>
+                  <View style={styles.profilePhotoContainer}>
+                    {profile.photo ? (
+                      <Image source={{ uri: apiPath(profile.photo) }} style={styles.profilePhotoImage} />
+                    ) : (
+                      <View style={styles.profilePhotoPlaceholder}>
+                        <Text style={styles.profilePhotoInitial}>
+                          {String(profile.name || session?.user?.name || 'C').charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                    )}
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Update profile photo"
+                      onPress={() => setPhotoModalVisible((curr) => !curr)}
+                      style={styles.profilePhotoBadgeBtn}
+                    >
+                      <Text style={styles.profilePhotoBadgeIcon}>📷</Text>
+                    </Pressable>
                   </View>
-                  <Text style={styles.partnerOverviewChevron}>›</Text>
+
+                  <View style={styles.profilePhotoMeta}>
+                    <Text style={styles.profilePhotoTitle}>{profile.name || 'Tomato Customer'}</Text>
+                    <Pressable onPress={() => setPhotoModalVisible((curr) => !curr)} style={styles.updatePhotoTextBtn}>
+                      <Text style={styles.updatePhotoText}>Update profile photo</Text>
+                    </Pressable>
+                  </View>
                 </View>
-                <Text style={styles.partnerOverviewNote}>
-                  View real-time sales volume, fulfillment metrics & top products
-                </Text>
-              </Pressable>
+
+                {/* Photo URL / Picker Box */}
+                {photoModalVisible && (
+                  <View style={styles.photoPickerBox}>
+                    <Text style={styles.photoPickerTitle}>Enter Profile Photo URL:</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="https://example.com/avatar.jpg"
+                      autoCapitalize="none"
+                      value={photoUrlInput || profile.photo}
+                      onChangeText={setPhotoUrlInput}
+                    />
+                    <View style={styles.photoPickerActions}>
+                      <Pressable
+                        style={styles.photoPickerSaveBtn}
+                        onPress={() => {
+                          if (photoUrlInput.trim()) {
+                            setProfile((c) => ({ ...c, photo: photoUrlInput.trim() }));
+                          }
+                          setPhotoModalVisible(false);
+                        }}
+                      >
+                        <Text style={styles.photoPickerSaveText}>Apply Photo</Text>
+                      </Pressable>
+                      <Pressable
+                        style={styles.photoPickerCancelBtn}
+                        onPress={() => setPhotoModalVisible(false)}
+                      >
+                        <Text style={styles.photoPickerCancelText}>Cancel</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                )}
+              </>
+            )}
+
+            {/* Account / Restaurant / Shop / Customer ID (Customers & Riders only) */}
+            {!isPartner && (
+              <>
+                <Text style={styles.fieldLabel}>{accountIdLabel}</Text>
+                <View style={styles.readOnlyField}>
+                  <Text style={styles.readOnlyText}>{accountId}</Text>
+                  <Text style={styles.readOnlyBadge}>VERIFIED ID</Text>
+                </View>
+              </>
             )}
 
             {/* Full Name */}
@@ -1161,8 +1149,24 @@ export default function ProfileAccess({
     onNavigate(item.key);
   }
 
-  const userPhoto = session.user.profilePhoto || session.user.photo || session.user.avatar || session.user.image;
-  const initial = (session.user.name || session.user.displayName || '').trim().charAt(0).toUpperCase();
+  const isPartner = session.user.role === 'restaurant' || session.user.role === 'shop';
+  const partnerFallback = session.user.role === 'shop' ? 'Shop' : 'Restaurant';
+  const partnerName = (
+    session.user.name ||
+    session.user.displayName ||
+    (session.user as any).restaurantName ||
+    (session.user as any).shopName ||
+    (session.user as any).storeName ||
+    partnerFallback
+  ).trim();
+  const partnerInitial = partnerName.charAt(0).toUpperCase();
+
+  const userPhoto = isPartner
+    ? null
+    : (session.user.profilePhoto || session.user.photo || session.user.avatar || session.user.image);
+  const initial = isPartner
+    ? partnerInitial
+    : (session.user.name || session.user.displayName || '').trim().charAt(0).toUpperCase();
   const menuItems = items.filter((item) => item.key !== 'help' && item.key !== 'profile-settings');
   const accountId = getAccountDisplayId(session.user, roleLabel);
 
@@ -1208,7 +1212,7 @@ export default function ProfileAccess({
           <Pressable style={styles.menuCard} onPress={(e) => e.stopPropagation?.()}>
             <View style={styles.menuHeader}>
               <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{(session.user.name || 'T').charAt(0).toUpperCase()}</Text>
+                <Text style={styles.avatarText}>{initial || 'T'}</Text>
               </View>
               <View style={styles.identity}>
                 <Text numberOfLines={1} style={styles.userName}>{session.user.name || 'Tomato user'}</Text>
@@ -1228,10 +1232,12 @@ export default function ProfileAccess({
             <ScrollView style={styles.menuScroll} showsVerticalScrollIndicator={false}>
               {menuItems.map((item) => (
                 <Pressable key={item.key} onPress={() => chooseItem(item)} style={styles.menuItem}>
-                  <Text style={styles.menuItemIcon}>{item.icon}</Text>
+                  {Boolean(item.icon) && <Text style={styles.menuItemIcon}>{item.icon}</Text>}
                   <View style={styles.menuItemBody}>
                     <Text style={styles.menuItemLabel}>{item.label}</Text>
-                    <Text style={styles.menuItemDescription}>{item.description}</Text>
+                    {Boolean(item.description) && (
+                      <Text style={styles.menuItemDescription}>{item.description}</Text>
+                    )}
                   </View>
                   <Text style={styles.chevron}>›</Text>
                 </Pressable>
@@ -1599,30 +1605,56 @@ const styles = StyleSheet.create({
     borderColor: '#eee6df',
     borderWidth: 1,
     borderRadius: 16,
-    padding: 18,
+    padding: 16,
+    flexDirection: 'row',
     alignItems: 'center',
     marginTop: 6,
     marginBottom: 12,
   },
+  partnerAvatarCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#fff0eb',
+    borderWidth: 2,
+    borderColor: '#fca597',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  partnerAvatarText: {
+    color: '#c8322a',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  partnerAccountInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
   partnerAccountName: {
     color: '#302923',
     fontWeight: '800',
-    fontSize: 18,
-    marginBottom: 4,
+    fontSize: 17,
+    marginBottom: 2,
   },
   partnerAccountMuted: {
     color: '#82786f',
     fontSize: 12,
-    lineHeight: 18,
-    marginTop: 2,
+    lineHeight: 17,
   },
   partnerAccountRole: {
+    alignSelf: 'flex-start',
     color: '#c8322a',
     backgroundColor: '#fff0eb',
     borderRadius: 7,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    marginTop: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginTop: 6,
     fontSize: 9,
     fontWeight: '800',
     letterSpacing: 0.8,
@@ -1631,6 +1663,6 @@ const styles = StyleSheet.create({
     color: '#9b541f',
     fontSize: 11,
     fontWeight: '700',
-    marginTop: 8,
+    marginTop: 5,
   },
 });

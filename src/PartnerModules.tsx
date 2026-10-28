@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -220,7 +221,9 @@ export default function PartnerModules({
           ...current,
           accountHolderName: nextBank.accountHolderName || current.accountHolderName,
           bankName: nextBank.bankName || current.bankName,
+          accountNumber: nextBank.accountNumber || current.accountNumber,
           ifscCode: nextBank.ifscCode || current.ifscCode,
+          panNumber: nextBank.panNumber || current.panNumber,
           panHolderName: nextBank.panHolderName || current.panHolderName,
           upiId: nextBank.upiId || current.upiId,
           adminNote: nextBank.adminNote || current.adminNote,
@@ -466,8 +469,28 @@ export default function PartnerModules({
     ]);
   }
 
-  const locked = Boolean(bankDetails.isApproved || bankDetails.isLocked);
-  const accountSuffix = bankDetails.accountNumber ? `••••${bankDetails.accountNumber.slice(-4)}` : 'Not submitted';
+  const isBankApproved = Boolean(bankDetails.isApproved || profile.isApproved);
+  const isBankLocked = Boolean(bankDetails.isLocked);
+  const isBankSubmitted = Boolean(bankDetails.isSubmitted);
+
+  let bankBadgeLabel = '⚠️ Not Submitted';
+  let bankBadgeVariant: 'approved' | 'ready' | 'pending' = 'pending';
+
+  if (isBankApproved && isBankLocked) {
+    bankBadgeLabel = '🔒 Approved & Locked';
+    bankBadgeVariant = 'approved';
+  } else if (isBankSubmitted) {
+    bankBadgeLabel = '⏳ Submitted — Pending Admin Approval';
+    bankBadgeVariant = 'ready';
+  }
+
+  const normBank = bankForm.accountHolderName.trim().toLowerCase().replace(/\s+/g, ' ');
+  const normPan = bankForm.panHolderName.trim().toLowerCase().replace(/\s+/g, ' ');
+  const showNameMatch = !isBankLocked && Boolean(normBank || normPan);
+  const isNameMatched = Boolean(normBank && normPan && normBank === normPan);
+
+  const agreementCommission = Number(bankDetails.agreementCommissionPercent ?? 15);
+  const agreementFssai = bankDetails.adminNote || bankForm.adminNote || '';
 
   return (
     <View style={styles.content}>
@@ -721,12 +744,243 @@ export default function PartnerModules({
               {!transfers.length && <Text style={styles.muted}>No finance transfers found.</Text>}
             </View>
           )}
-          {section === 'account' && null}
-          {section !== 'account' && (
-            <Pressable style={styles.secondaryButton} onPress={() => void load()}>
-              <Text style={styles.secondaryText}>Refresh</Text>
-            </Pressable>
+          {section === 'account' && (
+            <View style={styles.webPanelCard}>
+              <View style={styles.webPanelHeader}>
+                <View style={styles.webPanelTitleBlock}>
+                  <Text
+                    style={styles.webPanelTitle}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.7}
+                  >
+                    🏦 Bank Details, PAN KYC & Payout Agreement
+                  </Text>
+                  <Text style={styles.webPanelSubtitle}>
+                    Submit your Bank Account, IFSC Code, and PAN Card details to receive order payouts from Tomato. Your{' '}
+                    <Text style={styles.webPanelSubtitleBold}>
+                      Bank Account Holder Name must exactly match the Name on your PAN Card
+                    </Text>{' '}
+                    for account approval.
+                  </Text>
+                </View>
+                <View style={styles.badgeRow}>
+                  <View
+                    style={[
+                      styles.statusBadgePill,
+                      bankBadgeVariant === 'approved'
+                        ? styles.badgeApproved
+                        : bankBadgeVariant === 'ready'
+                          ? styles.badgeReady
+                          : styles.badgePending,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusBadgeText,
+                        bankBadgeVariant === 'approved'
+                          ? styles.badgeTextApproved
+                          : bankBadgeVariant === 'ready'
+                            ? styles.badgeTextReady
+                            : styles.badgeTextPending,
+                      ]}
+                    >
+                      {bankBadgeLabel}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {isBankLocked && (
+                <View style={styles.lockBanner}>
+                  <View style={styles.bannerRow}>
+                    <Text style={styles.bannerIcon}>🔒</Text>
+                    <View style={styles.bannerTextCol}>
+                      <Text style={styles.lockBannerTitle}>Bank & PAN Details Approved & Locked</Text>
+                      <Text style={styles.lockBannerText}>
+                        Your bank details and PAN KYC have been verified and approved by Tomato Admin. For security, bank details are{' '}
+                        <Text style={styles.lockBannerBold}>non-editable once approved</Text>. If you need to update your bank account, please raise a request to Admin via Help & Support.
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {!isBankLocked && (
+                <View style={styles.pendingBanner}>
+                  <View style={styles.bannerRow}>
+                    <Text style={styles.bannerIcon}>⚠️</Text>
+                    <View style={styles.bannerTextCol}>
+                      <Text style={styles.pendingBannerTitle}>Mandatory for Partner Approval & Payouts</Text>
+                      <Text style={styles.pendingBannerText}>
+                        Please submit accurate bank account and PAN details. Order payouts will not be processed without approved bank details. The{' '}
+                        <Text style={styles.pendingBannerBold}>Account Holder Name must match your PAN</Text>.
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              <View style={styles.agreementStrip}>
+                <View style={styles.agreementStripLeft}>
+                  <Text style={styles.agreementStripEyebrow}>TOMATO PAYOUT AGREEMENT</Text>
+                  <Text style={styles.agreementStripMain}>
+                    Tomato Platform Commission Agreement:{' '}
+                    <Text style={styles.agreementStripBold}>{agreementCommission}%</Text> (Remaining order amount settled to your bank account)
+                  </Text>
+                </View>
+                {Boolean(agreementFssai) && (
+                  <Text style={styles.agreementStripNote}>FSSAI No. : {agreementFssai}</Text>
+                )}
+              </View>
+
+              <View style={styles.bankFormContainer}>
+                <View style={styles.formGroup}>
+                  <Text style={styles.fieldLabel}>Bank Account Holder Name *</Text>
+                  <TextInput
+                    style={[styles.input, isBankLocked && styles.inputLocked]}
+                    value={bankForm.accountHolderName}
+                    editable={!isBankLocked}
+                    onChangeText={(val) => setBankForm((cur) => ({ ...cur, accountHolderName: val }))}
+                    placeholder="Exact name as per bank passbook/cheque"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.fieldLabel}>Name on PAN Card *</Text>
+                  <TextInput
+                    style={[styles.input, isBankLocked && styles.inputLocked]}
+                    value={bankForm.panHolderName}
+                    editable={!isBankLocked}
+                    onChangeText={(val) => setBankForm((cur) => ({ ...cur, panHolderName: val }))}
+                    placeholder="Exact name as printed on PAN card"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+
+                {showNameMatch && (
+                  <View
+                    style={[
+                      styles.nameMatchBox,
+                      isNameMatched ? styles.nameMatchBoxSuccess : styles.nameMatchBoxError,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.nameMatchMsg,
+                        isNameMatched ? styles.nameMatchMsgSuccess : styles.nameMatchMsgError,
+                      ]}
+                    >
+                      {isNameMatched
+                        ? '✅ Bank Account Holder Name matches Name on PAN Card.'
+                        : '⚠️ Bank Account Holder Name MUST match Name on PAN Card for admin approval.'}
+                    </Text>
+                  </View>
+                )}
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.fieldLabel}>PAN Card Number (10 Characters) *</Text>
+                  <TextInput
+                    style={[styles.input, styles.monoInput, isBankLocked && styles.inputLocked]}
+                    value={bankForm.panNumber}
+                    editable={!isBankLocked}
+                    autoCapitalize="characters"
+                    maxLength={10}
+                    onChangeText={(val) => setBankForm((cur) => ({ ...cur, panNumber: val.toUpperCase() }))}
+                    placeholder="e.g. ABCDE1234F"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.fieldLabel}>Bank Name *</Text>
+                  <TextInput
+                    style={[styles.input, isBankLocked && styles.inputLocked]}
+                    value={bankForm.bankName}
+                    editable={!isBankLocked}
+                    onChangeText={(val) => setBankForm((cur) => ({ ...cur, bankName: val }))}
+                    placeholder="e.g. HDFC Bank, SBI, ICICI Bank"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.fieldLabel}>Bank Account Number *</Text>
+                  <TextInput
+                    style={[styles.input, styles.monoInput, isBankLocked && styles.inputLocked]}
+                    value={bankForm.accountNumber}
+                    editable={!isBankLocked}
+                    keyboardType="number-pad"
+                    onChangeText={(val) => setBankForm((cur) => ({ ...cur, accountNumber: val }))}
+                    placeholder="Enter bank account number"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.fieldLabel}>IFSC Code (11 Characters) *</Text>
+                  <TextInput
+                    style={[styles.input, styles.monoInput, isBankLocked && styles.inputLocked]}
+                    value={bankForm.ifscCode}
+                    editable={!isBankLocked}
+                    autoCapitalize="characters"
+                    maxLength={11}
+                    onChangeText={(val) => setBankForm((cur) => ({ ...cur, ifscCode: val.toUpperCase() }))}
+                    placeholder="e.g. HDFC0001234"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.fieldLabel}>UPI ID (Optional for Instant Settlement)</Text>
+                  <TextInput
+                    style={[styles.input, isBankLocked && styles.inputLocked]}
+                    value={bankForm.upiId}
+                    editable={!isBankLocked}
+                    autoCapitalize="none"
+                    onChangeText={(val) => setBankForm((cur) => ({ ...cur, upiId: val }))}
+                    placeholder="e.g. merchant@okaxis"
+                    placeholderTextColor="#9ca3af"
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.fieldLabel}>
+                    Agreement Note (FSSAI Registration Number & Expiry) *
+                  </Text>
+                  <TextInput
+                    style={[styles.input, isBankLocked && styles.inputLocked]}
+                    value={bankForm.adminNote}
+                    editable={!isBankLocked}
+                    onChangeText={(val) => setBankForm((cur) => ({ ...cur, adminNote: val }))}
+                    placeholder="Shop and restaurant has to share FSSAI registration number and expiry (e.g. FSSAI: 11223344556677, Exp: 08/2028)"
+                    placeholderTextColor="#9ca3af"
+                  />
+                  <Text style={styles.bankNoteHint}>
+                    📌 Mandatory for Shop & Restaurant: Please enter your FSSAI Registration Number and Expiry Date.
+                  </Text>
+                </View>
+
+                {!isBankLocked && (
+                  <View style={styles.submitRow}>
+                    <Pressable
+                      style={[styles.primaryButton, busy === 'bank-details' && styles.disabledButton]}
+                      disabled={busy === 'bank-details'}
+                      onPress={() => void saveBankDetails()}
+                    >
+                      <Text style={styles.primaryText}>
+                        {busy === 'bank-details' ? 'Saving...' : '💾 Submit Bank & PAN Details for Verification'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            </View>
           )}
+          <Pressable style={styles.secondaryButton} onPress={() => void load()}>
+            <Text style={styles.secondaryText}>Refresh</Text>
+          </Pressable>
         </>
       )}
     </View>
@@ -772,6 +1026,7 @@ const styles = StyleSheet.create({
   metricLabel: { color: '#766d68', fontSize: 10, marginTop: 4, textTransform: 'capitalize' },
   metricLabelPlain: { textTransform: 'none' },
   primaryButton: { minHeight: 40, justifyContent: 'center', alignItems: 'center', backgroundColor: '#d83a32', borderRadius: 10, paddingHorizontal: 12, marginTop: 10 },
+  disabledButton: { opacity: 0.65 },
   primaryText: { color: '#fff', fontWeight: '800', fontSize: 12 },
   secondaryButton: { minHeight: 36, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff1ed', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 8, marginTop: 7 },
   secondaryText: { color: '#c2352d', fontWeight: '800', fontSize: 11 },
@@ -885,297 +1140,217 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   flex: { flex: 1 },
-  collapsibleHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 2,
-    marginBottom: 8,
-  },
-  arrowIconButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#fff0eb',
+  webPanelCard: {
+    backgroundColor: '#fff',
+    borderColor: '#e2e8f0',
     borderWidth: 1,
-    borderColor: '#fcdcd5',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 8,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
   },
-  arrowIconText: {
-    color: '#d83a32',
-    fontSize: 12,
-    fontWeight: '800',
+  webPanelHeader: {
+    marginBottom: 14,
   },
-  collapsedSubtitle: {
-    fontSize: 11,
-    color: '#82786f',
-    marginTop: 2,
-    fontWeight: '500',
-  },
-  bankInstructionText: {
-    fontSize: 12,
-    color: '#6e5f56',
-    lineHeight: 18,
-    marginTop: 6,
-    marginBottom: 4,
-  },
-  lockedContainer: {
-    backgroundColor: '#f0fdf4',
-    borderWidth: 1.5,
-    borderColor: '#86efac',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 12,
-  },
-  lockedHeaderBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#dcfce7',
-    borderColor: '#22c55e',
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    marginBottom: 10,
-  },
-  lockedBadgeText: {
-    color: '#15803d',
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  lockedContent: {
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
-  lockedIconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#dcfce7',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  lockedBigIcon: {
-    fontSize: 22,
-  },
-  lockedTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#14532d',
-    textAlign: 'center',
+  webPanelTitleBlock: {
     marginBottom: 6,
   },
-  lockedDescription: {
-    fontSize: 11.5,
-    color: '#166534',
-    lineHeight: 17,
-    textAlign: 'center',
-  },
-  agreementCard: {
-    backgroundColor: '#fffaf5',
-    borderWidth: 1.5,
-    borderColor: '#fed7aa',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 12,
-  },
-  agreementHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  agreementEmoji: {
-    fontSize: 18,
-  },
-  agreementTitle: {
-    fontSize: 13,
+  webPanelTitle: {
+    color: '#0f172a',
+    fontSize: 15.5,
     fontWeight: '800',
-    color: '#7c2d12',
+    letterSpacing: -0.2,
+    marginBottom: 6,
   },
-  agreementBody: {
-    gap: 6,
-  },
-  agreementRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-  },
-  agreementDot: {
-    fontSize: 13,
-    color: '#9a3412',
+  webPanelSubtitle: {
+    color: '#64748b',
+    fontSize: 12.5,
     lineHeight: 18,
   },
-  agreementText: {
-    flex: 1,
-    fontSize: 11.5,
-    color: '#431407',
-    lineHeight: 18,
-  },
-  agreementBold: {
+  webPanelSubtitleBold: {
     fontWeight: '700',
-    color: '#271109',
-  },
-  bankInstructionBold: {
-    fontWeight: '700',
-    color: '#382e27',
-  },
-  verifiedCard: {
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-  },
-  verifiedCardTitle: {
-    fontSize: 12,
-    fontWeight: '800',
     color: '#334155',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
-  warningContainer: {
-    backgroundColor: '#fffbeb',
-    borderWidth: 1.5,
-    borderColor: '#fde68a',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 12,
-  },
-  warningHeaderRow: {
+  badgeRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
-  warningIcon: {
-    fontSize: 18,
-  },
-  warningTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#92400e',
-    marginBottom: 4,
-  },
-  warningDescription: {
-    fontSize: 11.5,
-    color: '#78350f',
-    lineHeight: 17,
-  },
-  statusStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-    marginTop: 2,
-  },
-  statusStripLabel: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: '#524741',
-  },
-  statusStripBadge: {
-    fontSize: 11,
-    fontWeight: '800',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    overflow: 'hidden',
-  },
-  statusBadgeSubmitted: {
-    backgroundColor: '#eff6ff',
-    color: '#1d4ed8',
-    borderColor: '#bfdbfe',
-    borderWidth: 1,
-  },
-  statusBadgePending: {
-    backgroundColor: '#fffbeb',
-    color: '#b45309',
-    borderColor: '#fde68a',
-    borderWidth: 1,
-  },
-  inputLabel: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: '#3d342f',
-    marginTop: 10,
+    marginTop: 6,
     marginBottom: 2,
   },
-  inputHelper: {
-    fontSize: 10.5,
-    color: '#b45309',
+  statusBadgePill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignSelf: 'flex-start',
+  },
+  badgeApproved: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#86efac',
+  },
+  badgeReady: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#93c5fd',
+  },
+  badgePending: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fde68a',
+  },
+  statusBadgeText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+  },
+  badgeTextApproved: {
+    color: '#166534',
+  },
+  badgeTextReady: {
+    color: '#1e40af',
+  },
+  badgeTextPending: {
+    color: '#92400e',
+  },
+  lockBanner: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#86efac',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  pendingBanner: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fde68a',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  bannerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  bannerIcon: {
+    fontSize: 18,
+    marginRight: 10,
+    marginTop: 1,
+  },
+  bannerTextCol: {
+    flex: 1,
+  },
+  lockBannerTitle: {
+    color: '#14532d',
+    fontSize: 13.5,
+    fontWeight: '700',
+    marginBottom: 3,
+  },
+  lockBannerText: {
+    color: '#14532d',
+    fontSize: 11.5,
+    lineHeight: 16,
+  },
+  lockBannerBold: {
+    fontWeight: '700',
+  },
+  pendingBannerTitle: {
+    color: '#92400e',
+    fontSize: 13.5,
+    fontWeight: '700',
+    marginBottom: 3,
+  },
+  pendingBannerText: {
+    color: '#92400e',
+    fontSize: 11.5,
+    lineHeight: 16,
+  },
+  pendingBannerBold: {
+    fontWeight: '700',
+  },
+  agreementStrip: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
+  agreementStripLeft: {
+    marginBottom: 4,
+  },
+  agreementStripEyebrow: {
+    color: '#64748b',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginBottom: 3,
+  },
+  agreementStripMain: {
+    color: '#1e293b',
+    fontSize: 12.5,
+    lineHeight: 18,
+  },
+  agreementStripBold: {
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  agreementStripNote: {
+    color: '#64748b',
+    fontSize: 11.5,
     fontWeight: '600',
     marginTop: 4,
-    marginBottom: 6,
   },
-  nameMatchIndicator: {
+  bankFormContainer: {
+    marginTop: 2,
+  },
+  formGroup: {
+    marginBottom: 12,
+  },
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 2,
+  },
+  monoInput: {
+    fontFamily: Platform.select({ ios: 'Courier', default: 'monospace' }),
+  },
+  inputLocked: {
+    backgroundColor: '#f1f5f9',
+    color: '#64748b',
+    borderColor: '#cbd5e1',
+  },
+  nameMatchBox: {
     borderRadius: 8,
+    paddingVertical: 8,
     paddingHorizontal: 10,
-    paddingVertical: 7,
-    marginTop: 8,
-    marginBottom: 4,
+    marginBottom: 12,
     borderWidth: 1,
   },
-  nameMatchSuccess: {
+  nameMatchBoxSuccess: {
     backgroundColor: '#f0fdf4',
     borderColor: '#bbf7d0',
   },
-  nameMatchError: {
+  nameMatchBoxError: {
     backgroundColor: '#fef2f2',
     borderColor: '#fecaca',
   },
-  nameMatchInfo: {
-    backgroundColor: '#f8fafc',
-    borderColor: '#e2e8f0',
+  nameMatchMsg: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    lineHeight: 16,
   },
-  nameMatchText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  nameMatchTextSuccess: {
+  nameMatchMsgSuccess: {
     color: '#15803d',
   },
-  nameMatchTextError: {
+  nameMatchMsgError: {
     color: '#dc2626',
   },
-  nameMatchTextInfo: {
-    color: '#64748b',
-  },
-  payoutsHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 8,
-    marginBottom: 6,
-    paddingTop: 8,
-    borderTopColor: '#f1e8e2',
-    borderTopWidth: 1,
-  },
-  payoutsSectionTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#302923',
-  },
-  payoutRefreshBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: '#fff5f2',
-    borderWidth: 1,
-    borderColor: '#fcdcd5',
-  },
-  payoutRefreshText: {
+  bankNoteHint: {
+    color: '#b45309',
     fontSize: 11,
-    fontWeight: '700',
-    color: '#d83a32',
+    fontWeight: '600',
+    marginTop: 4,
+    lineHeight: 15,
   },
-  emptyPayoutsText: {
-    fontSize: 11.5,
-    color: '#82786f',
-    fontStyle: 'italic',
-    paddingVertical: 6,
+  submitRow: {
+    marginTop: 6,
+    marginBottom: 6,
   },
 });

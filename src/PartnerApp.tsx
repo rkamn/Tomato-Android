@@ -152,7 +152,7 @@ export default function PartnerApp({
       : 'Restaurant Orders';
   const isApproved = session.user.isApproved !== false;
   const [tab, setTab] = useState<PartnerTab>('orders');
-  type OrderFilter = 'all' | 'new' | 'in_progress' | 'out_for_delivery' | 'delivered_today';
+  type OrderFilter = 'all' | 'new' | 'in_progress' | 'out_for_delivery' | 'cancelled_today' | 'delivered_today';
   const [orderFilter, setOrderFilter] = useState<OrderFilter>('all');
   const [isOpen, setIsOpen] = useState(false);
   const [orders, setOrders] = useState<PartnerOrder[]>([]);
@@ -602,6 +602,19 @@ export default function PartnerApp({
       order.pickupStatus === 'picked_up'
     ) && s !== 'delivered' && s !== 'cancelled' && s !== 'returned';
   }).length;
+  const cancelledTodayCount = orders.filter((order) => {
+    const s = (order.status || '').toLowerCase();
+    if (s !== 'cancelled') return false;
+    const dateStr = (order as any).cancelledAt || order.updatedAt || order.createdAt;
+    if (!dateStr) return true;
+    const d = new Date(dateStr);
+    const now = new Date();
+    return (
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate()
+    );
+  }).length;
   const deliveredTodayCount = orders.filter((order) => {
     const s = (order.status || '').toLowerCase();
     if (s !== 'delivered') return false;
@@ -641,6 +654,19 @@ export default function PartnerApp({
           order.isPickedUp ||
           order.pickupStatus === 'picked_up'
         ) && s !== 'delivered' && s !== 'cancelled' && s !== 'returned';
+      }
+      if (orderFilter === 'cancelled_today') {
+        const s = (order.status || '').toLowerCase();
+        if (s !== 'cancelled') return false;
+        const dateStr = (order as any).cancelledAt || order.updatedAt || order.createdAt;
+        if (!dateStr) return true;
+        const d = new Date(dateStr);
+        const now = new Date();
+        return (
+          d.getFullYear() === now.getFullYear() &&
+          d.getMonth() === now.getMonth() &&
+          d.getDate() === now.getDate()
+        );
       }
       if (orderFilter === 'delivered_today') {
         const s = (order.status || '').toLowerCase();
@@ -721,7 +747,7 @@ export default function PartnerApp({
           },
           { key: 'coupons', label: 'Coupons & offers', description: 'Manage your promotions', icon: '％' },
           { key: 'finance', label: 'Finance', description: 'Finance & Transfer Ledger', icon: '₹' },
-          { key: 'account', label: 'Bank & Payouts', description: 'Manage bank details and payout records', icon: '🏦' },
+          { key: 'account', label: 'Bank & Payouts', description: '', icon: '🏦' },
         ]}
         onNavigateProfile={(key) => {
           if (key === 'overview') {
@@ -796,6 +822,13 @@ export default function PartnerApp({
                 onPress={() => setOrderFilter((prev) => (prev === 'out_for_delivery' ? 'all' : 'out_for_delivery'))}
               />
               <StatCard
+                label="Cancelled"
+                value={cancelledTodayCount}
+                tint="#fee2e2"
+                selected={orderFilter === 'cancelled_today'}
+                onPress={() => setOrderFilter((prev) => (prev === 'cancelled_today' ? 'all' : 'cancelled_today'))}
+              />
+              <StatCard
                 label="Delivered Today"
                 value={deliveredTodayCount}
                 tint="#dcfce7"
@@ -841,7 +874,7 @@ export default function PartnerApp({
                 <Text style={styles.cardTitle}>
                   {orderFilter === 'all'
                     ? 'No orders yet'
-                    : `No ${orderFilter === 'new' ? 'new' : orderFilter === 'in_progress' ? 'in-progress' : orderFilter === 'out_for_delivery' ? 'out for delivery' : 'delivered today'} orders`}
+                    : `No ${orderFilter === 'new' ? 'new' : orderFilter === 'in_progress' ? 'in-progress' : orderFilter === 'out_for_delivery' ? 'out for delivery' : orderFilter === 'cancelled_today' ? 'cancelled today' : 'delivered today'} orders`}
                 </Text>
                 <Text style={styles.muted}>
                   {orderFilter === 'all'
@@ -1051,21 +1084,7 @@ export default function PartnerApp({
           </View>
         )}
 
-        {tab === 'account' && (
-          <View>
-            <Text style={styles.eyebrow}>{kind.toUpperCase()} ACCOUNT</Text>
-            <Text
-              style={styles.bankAgreementTitle}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.7}
-            >
-              🏦 Bank Details, PAN KYC & Payout Agreement
-            </Text>
-          </View>
-        )}
-
-        {(tab === 'coupons' || tab === 'finance') && (
+        {(tab === 'account' || tab === 'coupons' || tab === 'finance') && (
           <PartnerModules
             session={session}
             partnerRole={partnerRole}
@@ -1382,6 +1401,7 @@ function getStatCardBorder(tint: string): string {
     case '#fff0e5': return '#fed7aa';
     case '#eaf2ff': return '#bfdbfe';
     case '#f5f3ff': return '#ddd6fe';
+    case '#fee2e2': return '#fecaca';
     case '#dcfce7': return '#bbf7d0';
     case '#fef3c7': return '#fde68a';
     case '#eff7ee': return '#bbf7d0';

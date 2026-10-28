@@ -39,6 +39,7 @@ type BankDetails = {
   isLocked?: boolean;
   adminNote?: string;
   riderPayoutPerOrder?: number;
+  agreementCommissionPercent?: number;
 };
 type Coupon = {
   _id: string;
@@ -170,6 +171,7 @@ export default function PartnerModules({
     panNumber: '',
     panHolderName: '',
     upiId: '',
+    adminNote: '',
   });
 
   async function load() {
@@ -221,6 +223,7 @@ export default function PartnerModules({
           ifscCode: nextBank.ifscCode || current.ifscCode,
           panHolderName: nextBank.panHolderName || current.panHolderName,
           upiId: nextBank.upiId || current.upiId,
+          adminNote: nextBank.adminNote || current.adminNote,
         }));
       }
     } catch (reason) {
@@ -271,32 +274,47 @@ export default function PartnerModules({
 
   async function saveBankDetails() {
     const accountNumber = bankForm.accountNumber.trim();
+    const accountHolderName = bankForm.accountHolderName.trim();
+    const panHolderName = bankForm.panHolderName.trim();
+    const bankName = bankForm.bankName.trim();
+    const ifscCode = bankForm.ifscCode.trim().toUpperCase();
+    const panNumber = bankForm.panNumber.trim().toUpperCase();
+
     if (
-      !bankForm.accountHolderName.trim()
-      || !bankForm.bankName.trim()
-      || accountNumber.length < 6
-      || !bankForm.ifscCode.trim()
-      || !bankForm.panNumber.trim()
-      || !bankForm.panHolderName.trim()
+      !accountHolderName ||
+      !panHolderName ||
+      !bankName ||
+      accountNumber.length < 6 ||
+      !ifscCode ||
+      !panNumber
     ) {
-      setError('Enter the account holder, bank, account number, IFSC and PAN details.');
+      setError('Please fill in Account Holder Name, Name on PAN Card, Bank Name, Account Number, IFSC, and PAN.');
       return;
     }
+
+    const normBank = accountHolderName.toLowerCase().replace(/\s+/g, ' ');
+    const normPan = panHolderName.toLowerCase().replace(/\s+/g, ' ');
+    if (normBank !== normPan) {
+      setError(`Bank Account Holder Name ("${accountHolderName}") MUST match the Name on PAN Card ("${panHolderName}").`);
+      return;
+    }
+
     await runAction('bank-details', async () => {
-      await apiRequest(`${apiBase}/bank-details`, session.token, {
+      const res = await apiRequest<{ message?: string }>(`${apiBase}/bank-details`, session.token, {
         method: 'PUT',
         body: JSON.stringify({
-          ...bankForm,
-          accountHolderName: bankForm.accountHolderName.trim(),
-          bankName: bankForm.bankName.trim(),
+          accountHolderName,
+          panHolderName,
+          bankName,
           accountNumber,
-          ifscCode: bankForm.ifscCode.trim().toUpperCase(),
-          panNumber: bankForm.panNumber.trim().toUpperCase(),
-          panHolderName: bankForm.panHolderName.trim(),
+          ifscCode,
+          panNumber,
           upiId: bankForm.upiId.trim(),
+          adminNote: bankForm.adminNote.trim(),
         }),
       });
       setBankForm((current) => ({ ...current, accountNumber: '', panNumber: '' }));
+      Alert.alert('Details Submitted', res?.message || 'Bank & PAN details submitted for admin verification!');
     });
   }
 
@@ -453,10 +471,14 @@ export default function PartnerModules({
 
   return (
     <View style={styles.content}>
-      <Text style={styles.eyebrow}>{kind.toUpperCase()} WORKSPACE</Text>
-      <Text style={styles.title}>
-        {section === 'coupons' ? 'Your Coupons' : section === 'finance' ? 'Finance & Transfer Ledger' : 'Profile & bank details'}
-      </Text>
+      {section !== 'account' && (
+        <>
+          <Text style={styles.eyebrow}>{kind.toUpperCase()} WORKSPACE</Text>
+          <Text style={styles.title}>
+            {section === 'coupons' ? 'Your Coupons' : 'Finance & Transfer Ledger'}
+          </Text>
+        </>
+      )}
       {!!error && <Text style={styles.error}>{error}</Text>}
       {loading ? <ActivityIndicator color="#d83a32" style={styles.loader} /> : (
         <>
@@ -699,71 +721,12 @@ export default function PartnerModules({
               {!transfers.length && <Text style={styles.muted}>No finance transfers found.</Text>}
             </View>
           )}
-          {section === 'account' && (
-            <View>
-              <View style={styles.card}>
-                <Text style={styles.cardTitle}>{kind} profile</Text>
-                <TextInput style={styles.input} placeholder="Business name" value={profile.name || ''} onChangeText={(value) => setProfile((current) => ({ ...current, name: value }))} />
-                <TextInput style={styles.input} placeholder="Phone" keyboardType="phone-pad" value={profile.phone || ''} onChangeText={(value) => setProfile((current) => ({ ...current, phone: value }))} />
-                <TextInput style={styles.input} placeholder={partnerRole === 'shop' ? 'Shop address' : 'Restaurant address'} value={(partnerRole === 'shop' ? profile.shopAddress : profile.restaurantAddress) || ''} onChangeText={(value) => setProfile((current) => partnerRole === 'shop' ? ({ ...current, shopAddress: value }) : ({ ...current, restaurantAddress: value }))} />
-                <TextInput style={styles.input} placeholder={partnerRole === 'shop' ? 'Category' : 'Cuisine'} value={(partnerRole === 'shop' ? profile.category : profile.cuisine) || ''} onChangeText={(value) => setProfile((current) => partnerRole === 'shop' ? ({ ...current, category: value }) : ({ ...current, cuisine: value }))} />
-                <TextInput style={styles.input} placeholder="Pickup DIGIPIN (e.g. 4M8-9K2-T3P9)" autoCapitalize="characters" value={profile.digipin || ''} onChangeText={(value) => setProfile((current) => ({ ...current, digipin: value }))} />
-                {!!profile.digipin && (
-                  <Text style={styles.muted}>National Addressing Grid: {formatDigipin(profile.digipin)}</Text>
-                )}
-                <TextInput style={styles.input} placeholder="GST/GSN number" autoCapitalize="characters" value={profile.gsnNumber || ''} onChangeText={(value) => setProfile((current) => ({ ...current, gsnNumber: value }))} />
-                <Pressable disabled={busy === 'profile'} style={styles.primaryButton} onPress={() => void saveProfile()}>
-                  <Text style={styles.primaryText}>{busy === 'profile' ? 'Saving…' : 'Save profile'}</Text>
-                </Pressable>
-              </View>
-              <View style={styles.card}>
-                <Text style={styles.cardTitle}>Bank & KYC</Text>
-                <Text style={styles.muted}>
-                  {bankDetails.isApproved ? 'Approved and locked' : bankDetails.isSubmitted ? 'Submitted, awaiting review' : 'Not yet submitted'}
-                  {' · '}Account {accountSuffix}
-                </Text>
-                {!!bankDetails.adminNote && <Text style={styles.notice}>{bankDetails.adminNote}</Text>}
-                {locked ? (
-                  <Text style={styles.muted}>Approved bank details are locked. Contact Tomato support to request a change.</Text>
-                ) : (
-                  <>
-                    {([
-                      ['accountHolderName', 'Account holder'],
-                      ['bankName', 'Bank name'],
-                      ['accountNumber', 'Account number'],
-                      ['ifscCode', 'IFSC code'],
-                      ['panNumber', 'PAN number'],
-                      ['panHolderName', 'PAN holder name'],
-                      ['upiId', 'UPI ID (optional)'],
-                    ] as const).map(([field, placeholder]) => (
-                      <TextInput
-                        key={field}
-                        style={styles.input}
-                        placeholder={placeholder}
-                        value={bankForm[field]}
-                        onChangeText={(value) => setBankForm((current) => ({ ...current, [field]: value }))}
-                        autoCapitalize={field === 'ifscCode' || field === 'panNumber' ? 'characters' : 'words'}
-                        secureTextEntry={field === 'accountNumber' || field === 'panNumber'}
-                      />
-                    ))}
-                    <Pressable disabled={busy === 'bank-details'} style={styles.primaryButton} onPress={() => void saveBankDetails()}>
-                      <Text style={styles.primaryText}>{busy === 'bank-details' ? 'Submitting…' : 'Submit bank details'}</Text>
-                    </Pressable>
-                  </>
-                )}
-                {payouts.map((payout, index) => (
-                  <View key={String(payout._id || payout.id || index)} style={styles.payout}>
-                    <InfoLine label="Payout" value={money(payout.amount)} />
-                    <InfoLine label="Status" value={String(payout.status || '—')} />
-                    <InfoLine label="Reference" value={String(payout.utrCode || payout.transactionId || '—')} />
-                  </View>
-                ))}
-              </View>
-            </View>
+          {section === 'account' && null}
+          {section !== 'account' && (
+            <Pressable style={styles.secondaryButton} onPress={() => void load()}>
+              <Text style={styles.secondaryText}>Refresh</Text>
+            </Pressable>
           )}
-          <Pressable style={styles.secondaryButton} onPress={() => void load()}>
-            <Text style={styles.secondaryText}>Refresh</Text>
-          </Pressable>
         </>
       )}
     </View>
@@ -920,5 +883,299 @@ const styles = StyleSheet.create({
     color: '#302923',
     marginTop: 10,
     marginBottom: 8,
+  },
+  flex: { flex: 1 },
+  collapsibleHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+    marginBottom: 8,
+  },
+  arrowIconButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#fff0eb',
+    borderWidth: 1,
+    borderColor: '#fcdcd5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  arrowIconText: {
+    color: '#d83a32',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  collapsedSubtitle: {
+    fontSize: 11,
+    color: '#82786f',
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  bankInstructionText: {
+    fontSize: 12,
+    color: '#6e5f56',
+    lineHeight: 18,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  lockedContainer: {
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1.5,
+    borderColor: '#86efac',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+  },
+  lockedHeaderBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#dcfce7',
+    borderColor: '#22c55e',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginBottom: 10,
+  },
+  lockedBadgeText: {
+    color: '#15803d',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  lockedContent: {
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  lockedIconCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#dcfce7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  lockedBigIcon: {
+    fontSize: 22,
+  },
+  lockedTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#14532d',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  lockedDescription: {
+    fontSize: 11.5,
+    color: '#166534',
+    lineHeight: 17,
+    textAlign: 'center',
+  },
+  agreementCard: {
+    backgroundColor: '#fffaf5',
+    borderWidth: 1.5,
+    borderColor: '#fed7aa',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+  },
+  agreementHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  agreementEmoji: {
+    fontSize: 18,
+  },
+  agreementTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#7c2d12',
+  },
+  agreementBody: {
+    gap: 6,
+  },
+  agreementRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  agreementDot: {
+    fontSize: 13,
+    color: '#9a3412',
+    lineHeight: 18,
+  },
+  agreementText: {
+    flex: 1,
+    fontSize: 11.5,
+    color: '#431407',
+    lineHeight: 18,
+  },
+  agreementBold: {
+    fontWeight: '700',
+    color: '#271109',
+  },
+  bankInstructionBold: {
+    fontWeight: '700',
+    color: '#382e27',
+  },
+  verifiedCard: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  verifiedCardTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#334155',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  warningContainer: {
+    backgroundColor: '#fffbeb',
+    borderWidth: 1.5,
+    borderColor: '#fde68a',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+  },
+  warningHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  warningIcon: {
+    fontSize: 18,
+  },
+  warningTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#92400e',
+    marginBottom: 4,
+  },
+  warningDescription: {
+    fontSize: 11.5,
+    color: '#78350f',
+    lineHeight: 17,
+  },
+  statusStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+    marginTop: 2,
+  },
+  statusStripLabel: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#524741',
+  },
+  statusStripBadge: {
+    fontSize: 11,
+    fontWeight: '800',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    overflow: 'hidden',
+  },
+  statusBadgeSubmitted: {
+    backgroundColor: '#eff6ff',
+    color: '#1d4ed8',
+    borderColor: '#bfdbfe',
+    borderWidth: 1,
+  },
+  statusBadgePending: {
+    backgroundColor: '#fffbeb',
+    color: '#b45309',
+    borderColor: '#fde68a',
+    borderWidth: 1,
+  },
+  inputLabel: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#3d342f',
+    marginTop: 10,
+    marginBottom: 2,
+  },
+  inputHelper: {
+    fontSize: 10.5,
+    color: '#b45309',
+    fontWeight: '600',
+    marginTop: 4,
+    marginBottom: 6,
+  },
+  nameMatchIndicator: {
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginTop: 8,
+    marginBottom: 4,
+    borderWidth: 1,
+  },
+  nameMatchSuccess: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+  },
+  nameMatchError: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  nameMatchInfo: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
+  },
+  nameMatchText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  nameMatchTextSuccess: {
+    color: '#15803d',
+  },
+  nameMatchTextError: {
+    color: '#dc2626',
+  },
+  nameMatchTextInfo: {
+    color: '#64748b',
+  },
+  payoutsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    marginBottom: 6,
+    paddingTop: 8,
+    borderTopColor: '#f1e8e2',
+    borderTopWidth: 1,
+  },
+  payoutsSectionTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#302923',
+  },
+  payoutRefreshBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#fff5f2',
+    borderWidth: 1,
+    borderColor: '#fcdcd5',
+  },
+  payoutRefreshText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#d83a32',
+  },
+  emptyPayoutsText: {
+    fontSize: 11.5,
+    color: '#82786f',
+    fontStyle: 'italic',
+    paddingVertical: 6,
   },
 });

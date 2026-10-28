@@ -144,6 +144,12 @@ export default function PartnerApp({
   const apiBase = `/api/${partnerRole}`;
   const itemPath = isShop ? 'items' : 'menu';
   const kind = isShop ? 'Shop' : 'Restaurant';
+  const partnerName = (session.user.name || session.user.displayName || '').trim();
+  const ordersTitle = partnerName
+    ? `${partnerName} Orders`
+    : isShop
+      ? 'Shop Orders'
+      : 'Restaurant Orders';
   const isApproved = session.user.isApproved !== false;
   const [tab, setTab] = useState<PartnerTab>('orders');
   type OrderFilter = 'all' | 'new' | 'in_progress' | 'out_for_delivery' | 'delivered_today';
@@ -701,11 +707,21 @@ export default function PartnerApp({
             description: `${kind} Business & Sales Report`,
             icon: '📊',
           },
-          { key: 'orders', label: 'Orders', description: 'Accept and manage incoming orders', icon: '▤' },
-          { key: 'catalog', label: isShop ? 'Inventory' : 'Menu', description: 'Manage products and availability', icon: '☷' },
+          {
+            key: 'orders',
+            label: ordersTitle,
+            description: 'Accept and manage incoming orders',
+            icon: '▤',
+          },
+          {
+            key: 'catalog',
+            label: 'Menu Management',
+            description: isShop ? 'Manage products and stock availability' : 'Manage dishes and menu availability',
+            icon: '☷',
+          },
           { key: 'coupons', label: 'Coupons & offers', description: 'Manage your promotions', icon: '％' },
           { key: 'finance', label: 'Finance', description: 'Finance & Transfer Ledger', icon: '₹' },
-          { key: 'account', label: 'Business profile & bank', description: 'Edit business and payout details', icon: '⚙' },
+          { key: 'account', label: 'Bank & Payouts', description: 'Manage bank details and payout records', icon: '🏦' },
         ]}
         onNavigateProfile={(key) => {
           if (key === 'overview') {
@@ -730,7 +746,7 @@ export default function PartnerApp({
         {tab === 'orders' && (
           <View>
             <Text style={styles.eyebrow}>{kind.toUpperCase()} OPERATIONS</Text>
-            <Text style={styles.title}>{isShop ? 'Shop orders' : 'Kitchen orders'}</Text>
+            <Text style={styles.title}>{ordersTitle}</Text>
             <Text style={styles.subtitle}>Review incoming orders and keep customers updated.</Text>
             {!isApproved && (
               <ApprovalNotice kind={kind} />
@@ -847,7 +863,7 @@ export default function PartnerApp({
             <View style={styles.titleRow}>
               <View style={styles.flex}>
                 <Text style={styles.eyebrow}>{kind.toUpperCase()} CATALOG</Text>
-                <Text style={styles.title}>{isShop ? 'Inventory' : 'Menu'}</Text>
+                <Text style={styles.title}>Menu Management</Text>
               </View>
               <Pressable onPress={startNewItem} style={styles.smallPrimary}>
                 <Text style={styles.smallPrimaryText}>+ Add</Text>
@@ -1037,70 +1053,15 @@ export default function PartnerApp({
 
         {tab === 'account' && (
           <View>
-            <Text style={styles.eyebrow}>PARTNER ACCOUNT</Text>
-            <Text style={styles.title}>Your workspace</Text>
-            <View style={styles.accountCard}>
-              <Text style={styles.accountName}>{session.user.name || kind}</Text>
-              {!!session.user.email && <Text style={styles.muted}>{session.user.email}</Text>}
-              {!!session.user.phone && <Text style={styles.muted}>{session.user.phone}</Text>}
-              <Text style={styles.accountRole}>{kind.toUpperCase()} PARTNER · {getAccountDisplayId(session.user, partnerRole)}</Text>
-              {!isApproved && <Text style={styles.pendingText}>Awaiting administrator approval</Text>}
-            </View>
-
-            {/* Overview / Business & Sales Report Card */}
-            <Pressable
-              onPress={() => setOverviewModalVisible(true)}
-              style={styles.overviewCardBtn}
-              accessibilityRole="button"
-              accessibilityLabel="View business and sales report"
+            <Text style={styles.eyebrow}>{kind.toUpperCase()} ACCOUNT</Text>
+            <Text
+              style={styles.bankAgreementTitle}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
             >
-              <View style={styles.overviewCardHeader}>
-                <View style={styles.overviewIconWrap}>
-                  <Text style={styles.overviewIcon}>📊</Text>
-                </View>
-                <View style={styles.flex}>
-                  <Text style={styles.overviewCardEyebrow}>BUSINESS & SALES OVERVIEW</Text>
-                  <Text style={styles.overviewCardTitle}>Overview</Text>
-                  <Text style={styles.overviewCardSubtitle}>
-                    {isShop ? 'Shop Business & Sales Report' : 'Restaurant Business & Sales Report'}
-                  </Text>
-                </View>
-                <Text style={styles.overviewChevron}>›</Text>
-              </View>
-              <View style={styles.overviewQuickMetrics}>
-                <View style={styles.overviewQuickMetric}>
-                  <Text style={styles.overviewQuickValue}>{money(salesVolume)}</Text>
-                  <Text style={styles.overviewQuickLabel}>Total Sales</Text>
-                </View>
-                <View style={styles.overviewQuickMetric}>
-                  <Text style={styles.overviewQuickValue}>{orders.length}</Text>
-                  <Text style={styles.overviewQuickLabel}>Orders</Text>
-                </View>
-                <View style={styles.overviewQuickMetric}>
-                  <Text style={styles.overviewQuickValue}>{deliveredTodayCount}</Text>
-                  <Text style={styles.overviewQuickLabel}>Delivered Today</Text>
-                </View>
-              </View>
-              <View style={styles.overviewCardFooter}>
-                <Text style={styles.overviewCardFooterText}>
-                  View full revenue, payment distribution & top products ›
-                </Text>
-              </View>
-            </Pressable>
-
-            <PartnerModules session={session} partnerRole={partnerRole} section="account" />
-            <Pressable onPress={() => setTab('orders')} style={styles.accountAction}>
-              <Text style={styles.actionLabel}>Manage orders</Text><Text style={styles.chevron}>›</Text>
-            </Pressable>
-            <Pressable onPress={() => setTab('catalog')} style={styles.accountAction}>
-              <Text style={styles.actionLabel}>Manage {isShop ? 'inventory' : 'menu'}</Text><Text style={styles.chevron}>›</Text>
-            </Pressable>
-            <Pressable onPress={() => setTab('finance')} style={styles.accountAction}>
-              <Text style={styles.actionLabel}>Finance & Transfer Ledger</Text><Text style={styles.chevron}>›</Text>
-            </Pressable>
-            <Pressable onPress={signOut} style={[styles.accountAction, styles.signOut]}>
-              <Text style={styles.deleteText}>Sign out</Text>
-            </Pressable>
+              🏦 Bank Details, PAN KYC & Payout Agreement
+            </Text>
           </View>
         )}
 
@@ -1832,6 +1793,14 @@ const styles = StyleSheet.create({
   dismiss: { color: '#b42318', fontSize: 20, paddingHorizontal: 5 },
   eyebrow: { color: '#d83a32', fontWeight: '800', fontSize: 10, letterSpacing: 1.2, marginBottom: 6 },
   title: { color: '#2d2621', fontSize: 24, fontWeight: '800', letterSpacing: -0.5 },
+  bankAgreementTitle: {
+    color: '#2d2621',
+    fontSize: 15.5,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+    marginTop: 4,
+    marginBottom: 10,
+  },
   subtitle: { color: '#82786f', fontSize: 13, lineHeight: 19, marginTop: 5, marginBottom: 17 },
   statusCard: { backgroundColor: '#fff', borderColor: '#eee5dd', borderWidth: 1, borderRadius: 16, padding: 14, flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   approvalNotice: { backgroundColor: '#fff7e8', borderColor: '#f2dfbd', borderWidth: 1, borderRadius: 13, padding: 12, marginBottom: 12 },

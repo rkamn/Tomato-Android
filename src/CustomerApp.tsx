@@ -22,13 +22,22 @@ import {
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import * as Location from 'expo-location';
 import { apiPath, apiRequest } from './api';
-import { formatDigipin, isValidDigipin, normalizeDigipin, openMapplsMap } from './digipin';
+import {
+  decodeDigipin,
+  formatDigipin,
+  isValidDigipin,
+  normalizeDigipin,
+  openMapplsMap,
+  resolveCustomerDigipin,
+  resolveCustomerLocation,
+} from './digipin';
 import GlobalHeader from './GlobalHeader';
+import LiveRouteTracker from './LiveRouteTracker';
 import PaymentModal from './PaymentModal';
 import type { PaymentSuccessDetails } from './PaymentModal';
 import ProfileAccess from './ProfileAccess';
 import type { ProfileMenuItem } from './ProfileAccess';
-import { getCustomerId, getItemVariants, isOrderReturnAccepted, isOrderTrackingActive } from './types';
+import { formatOrderNumber, formatOrderStatus, getCustomerId, getItemVariants, getOrderStatusBadgeColors, isOrderReturnAccepted, isOrderTrackingActive } from './types';
 import type {
   Address,
   CustomerNotification,
@@ -1573,9 +1582,12 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       const existingAddress = editingAddressId
         ? addresses.find((address) => address._id === editingAddressId)
         : undefined;
-      const coords = addressForm.coordinates?.length === 2
-        ? addressForm.coordinates
-        : existingAddress?.coordinates || existingAddress?.location?.coordinates || [];
+      const decodedFromDigipin = cleanDigipin ? decodeDigipin(cleanDigipin) : null;
+      const coords = decodedFromDigipin
+        ? [decodedFromDigipin.lng, decodedFromDigipin.lat]
+        : addressForm.coordinates?.length === 2
+          ? addressForm.coordinates
+          : existingAddress?.coordinates || existingAddress?.location?.coordinates || [];
 
       await apiRequest(
         editingAddressId
@@ -1739,18 +1751,33 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
             ...(paymentDetails.bankName ? { bankName: paymentDetails.bankName } : {}),
             ...(validatedCouponCode ? { couponCodes: [validatedCouponCode] } : {}),
             addressId: currentAddress._id,
-            deliveryAddress: {
-              label: currentAddress.label || 'Home',
-              phone: currentAddress.phone || session.user.phone || '',
-              line1: currentAddress.line1,
-              line2: currentAddress.line2 || '',
-              locality: currentAddress.locality || '',
-              city: currentAddress.city,
-              state: currentAddress.state || '',
-              postalCode: currentAddress.postalCode,
-              digipin: currentAddress.digipin || '',
-              coordinates: currentAddress.location?.coordinates || [],
-            },
+            ...(() => {
+              const resolvedCustDigipin = resolveCustomerDigipin(currentAddress) || normalizeDigipin(session.user.digipin);
+              const decodedCust = resolvedCustDigipin ? decodeDigipin(resolvedCustDigipin) : null;
+              const targetCoords = decodedCust
+                ? [decodedCust.lng, decodedCust.lat]
+                : (Array.isArray(currentAddress.coordinates) && currentAddress.coordinates.length === 2)
+                  ? currentAddress.coordinates
+                  : currentAddress.location?.coordinates || [];
+
+              return {
+                customerDigipin: resolvedCustDigipin || undefined,
+                digipin: resolvedCustDigipin || undefined,
+                deliveryAddress: {
+                  label: currentAddress.label || 'Home',
+                  phone: currentAddress.phone || session.user.phone || '',
+                  line1: currentAddress.line1,
+                  line2: currentAddress.line2 || '',
+                  locality: currentAddress.locality || '',
+                  city: currentAddress.city,
+                  state: currentAddress.state || '',
+                  postalCode: currentAddress.postalCode,
+                  digipin: resolvedCustDigipin || '',
+                  coordinates: targetCoords,
+                  location: targetCoords.length === 2 ? { type: 'Point', coordinates: targetCoords } : undefined,
+                },
+              };
+            })(),
           }),
         },
       );
@@ -2717,6 +2744,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                 trackingLoading={trackingBusyId === order._id}
                 bill={bills[order._id]}
                 billLoading={billBusyId === order._id}
+                sessionToken={session.token}
                 onTrack={() => void loadTracking(order._id)}
                 onViewBill={() => void loadBill(order._id)}
                 onReview={(item) => {
@@ -3874,6 +3902,7 @@ function OrderCard({
   onTrack,
   onViewBill,
   onReview,
+  sessionToken,
 }: {
   order: Order;
   tracking?: OrderTracking;
@@ -3884,6 +3913,7 @@ function OrderCard({
   onTrack: () => void;
   onViewBill: () => void;
   onReview: (item: { id: string; name: string; rating?: number }) => void;
+  sessionToken?: string;
 }) {
   const isShopOrder = Boolean(order.isShopOrder || order.shopId || order.shopName);
   const partner = order.shopName || order.restaurantName || (isShopOrder ? 'Tomato shop' : 'Tomato restaurant');
@@ -3895,9 +3925,11 @@ function OrderCard({
   const isAcceptedByStore = !['placed', 'pending'].includes(normalizedStatus);
   const isTrackingDisabled = (!isCancelled && !isAcceptedByStore) || trackingLoading;
   const isComplete = !isTrackingActive;
-  const status = isCancelled
-    ? (returnAccepted ? `returned to ${order.returnAcceptedBy || partner}` : 'cancelled · returning')
-    : (order.status || 'placed').replaceAll('_', ' ');
+  const formattedOrderNumber = formatOrderNumber(order);
+  const statusLabel = isCancelled
+    ? (returnAccepted ? `Returned to ${order.returnAcceptedBy || partner}` : 'Cancelled · Returning')
+    : formatOrderStatus(order.status || 'placed');
+  const badgeStyle = getOrderStatusBadgeColors(order.status || 'placed');
   const riderLocation = tracking?.rider?.currentLocation || tracking?.telemetry?.riderLocation
     || tracking?.telemetry?.currentLocation;
   const riderLat = riderLocation?.lat;
@@ -3925,11 +3957,21 @@ function OrderCard({
         </View>
       </View>
 
-      {/* Row 2: Order number & date on left, Track icon on right */}
+      {/* Row 2: Order number + Status badge + Date on left, Track icon on right */}
       <View style={styles.orderNumberRow}>
-        <Text style={[styles.itemDescription, styles.flex]} numberOfLines={1}>
-          {order.orderNumber || 'Order'} · {order.createdAt ? new Date(order.createdAt).toLocaleDateString() : 'Recent'}
-        </Text>
+        <View style={styles.orderNumberAndStatusRow}>
+          <Text style={styles.orderNumber}>{formattedOrderNumber}</Text>
+          <View style={[styles.orderStatusBadge, { backgroundColor: badgeStyle.bg }]}>
+            <Text style={[styles.orderStatusBadgeText, { color: badgeStyle.text }]}>
+              {statusLabel}
+            </Text>
+          </View>
+          {!!order.createdAt && (
+            <Text style={styles.orderDateMuted}>
+              · {new Date(order.createdAt).toLocaleDateString()}
+            </Text>
+          )}
+        </View>
         {!isComplete && (
           <Pressable
             accessibilityRole="button"
@@ -3961,22 +4003,9 @@ function OrderCard({
         )}
       </View>
 
-      {/* Row 3: Status pill (left) + Payment method & status (right) */}
+      {/* Row 3: Payment method & status (right) */}
       <View style={styles.orderStatusRow}>
-        <View style={[
-          styles.statusPill,
-          isDelivered && styles.statusPillDelivered,
-          isCancelled && (returnAccepted ? styles.statusPillReturned : styles.statusPillReturning),
-        ]}>
-          <Text style={[
-            styles.statusText,
-            isDelivered && styles.statusTextDelivered,
-            isCancelled && (returnAccepted ? styles.statusTextReturned : styles.statusTextReturning),
-          ]}>
-            {status}
-          </Text>
-        </View>
-
+        <View style={styles.flex} />
         <Text style={styles.paymentNoteRow}>
           {(() => {
             const isPaid = (order.paymentStatus || '').toLowerCase() === 'paid';
@@ -4159,42 +4188,46 @@ function OrderCard({
                 </>
               ) : (
                 <>
-                  <Text style={styles.itemDescription}>
-                    Status: {(tracking.status || order.status || 'placed').replaceAll('_', ' ')}
-                    {tracking.isPickedUp || tracking.pickupStatus === 'picked_up'
-                      ? ' · Picked up'
-                      : tracking.rider
-                        ? ' · Rider heading to pickup'
-                        : ' · Waiting for rider assignment'}
-                  </Text>
-                  {(tracking.estimatedMinutes ?? tracking.expectedDeliveryTimingMinutes) !== undefined && (
-                    <Text style={styles.itemDescription}>
-                      Estimated delivery: {tracking.estimatedMinutes ?? tracking.expectedDeliveryTimingMinutes} min
-                    </Text>
+                  {tracking.rider ? (
+                    <LiveRouteTracker
+                      orderId={order._id}
+                      orderNumber={order.orderNumber}
+                      initialTracking={tracking as any}
+                      endpoint={`/api/customer/orders/${encodeURIComponent(order._id)}/live-tracking`}
+                      token={sessionToken}
+                      isShop={isShopOrder}
+                      fallbackRiderName={tracking.rider?.name}
+                      fallbackRiderPhone={tracking.rider?.phone}
+                      fallbackCustomerName={order.customerName}
+                      fallbackCustomerAddress={order.deliveryAddress}
+                      fallbackCustomerDigipin={
+                        resolveCustomerDigipin(order) ||
+                        order.deliveryAddress?.digipin
+                      }
+                      fallbackStoreName={partner}
+                      fallbackStoreDigipin={order.pickupDigipin || order.restaurantDigipin || order.shopDigipin}
+                      fallbackStoreAddress={order.restaurantAddress || order.shopAddress}
+                      isPickedUp={Boolean(tracking.isPickedUp || tracking.pickupStatus === 'picked_up')}
+                    />
+                  ) : (
+                    <>
+                      <Text style={styles.itemDescription}>
+                        Status: {(tracking.status || order.status || 'placed').replaceAll('_', ' ')} · Waiting for rider assignment
+                      </Text>
+                      {(tracking.estimatedMinutes ?? tracking.expectedDeliveryTimingMinutes) !== undefined && (
+                        <Text style={styles.itemDescription}>
+                          Estimated delivery: {tracking.estimatedMinutes ?? tracking.expectedDeliveryTimingMinutes} min
+                        </Text>
+                      )}
+                      {!tracking.trackingClosed && (
+                        <Text style={styles.itemDescription}>
+                          {['placed', 'pending'].includes(tracking.status || order.status || '')
+                            ? 'The restaurant or shop needs to accept this order before a rider can accept the delivery.'
+                            : 'Your order is accepted. A rider working in your area will appear here after accepting the delivery.'}
+                        </Text>
+                      )}
+                    </>
                   )}
-                  {!tracking.rider && !tracking.trackingClosed && (
-                    <Text style={styles.itemDescription}>
-                      {['placed', 'pending'].includes(tracking.status || order.status || '')
-                        ? 'The restaurant or shop needs to accept this order before a rider can accept the delivery.'
-                        : 'Your order is accepted. A rider working in your area will appear here after accepting the delivery.'}
-                    </Text>
-                  )}
-                  {!!tracking.rider && typeof tracking.telemetry?.lastPingSecondsAgo === 'number' && (
-                    <Text style={styles.itemDescription}>
-                      Rider location updated {tracking.telemetry.lastPingSecondsAgo < 60
-                        ? `${tracking.telemetry.lastPingSecondsAgo} sec ago`
-                        : `${Math.floor(tracking.telemetry.lastPingSecondsAgo / 60)} min ago`}
-                      {tracking.telemetry.isLiveOnline === false ? ' · rider currently offline' : ''}
-                    </Text>
-                  )}
-                  {!!tracking.rider?.name && <Text style={styles.itemDescription}>Rider: {tracking.rider.name}</Text>}
-                  {!!tracking.rider?.phone && <Text style={styles.itemDescription}>Rider phone: {tracking.rider.phone}</Text>}
-                  {typeof riderLat === 'number' && typeof riderLng === 'number' && (
-                    <Pressable onPress={() => openRiderLocation(riderLat, riderLng)}>
-                      <Text style={styles.link}>View rider location on map</Text>
-                    </Pressable>
-                  )}
-                  {!tracking.trackingClosed && <Text style={styles.itemDescription}>Location refreshes every 30 seconds while this screen is active.</Text>}
                 </>
               )}
             </View>
@@ -5573,6 +5606,11 @@ const styles = StyleSheet.create({
   orderAmountAndBillRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   orderTotal: { color: '#302923', fontWeight: '800', fontSize: 14 },
   orderNumberRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4, minHeight: 32 },
+  orderNumberAndStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 7, flexWrap: 'wrap', flex: 1 },
+  orderNumber: { color: '#302923', fontWeight: '800', fontSize: 13.5 },
+  orderStatusBadge: { borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
+  orderStatusBadgeText: { fontSize: 11, fontWeight: '700', textTransform: 'capitalize' },
+  orderDateMuted: { color: '#8c8178', fontSize: 11, fontWeight: '600' },
   orderStatusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 4 },
   statusPill: { alignSelf: 'flex-start', backgroundColor: '#fff0e1', paddingVertical: 5, paddingHorizontal: 9, borderRadius: 8 },
   statusPillDelivered: { backgroundColor: '#1b8742' },

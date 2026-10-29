@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import { apiRequest } from './api';
-import { formatDigipin, isValidDigipin, normalizeDigipin } from './digipin';
+import { decodeDigipin, formatDigipin, isValidDigipin, normalizeDigipin } from './digipin';
 import type { Session } from './types';
 
 type PartnerRole = 'restaurant' | 'shop';
@@ -269,6 +269,12 @@ export default function PartnerModules({
             ? { shopAddress: profile.shopAddress?.trim(), category: profile.category?.trim() }
             : { restaurantAddress: profile.restaurantAddress?.trim(), cuisine: profile.cuisine?.trim() }),
           digipin: cleanDigipin,
+          ...(decodeDigipin(cleanDigipin) ? {
+            location: {
+              type: 'Point',
+              coordinates: [decodeDigipin(cleanDigipin)!.lng, decodeDigipin(cleanDigipin)!.lat],
+            },
+          } : {}),
           gsnNumber: profile.gsnNumber?.trim(),
         }),
       });

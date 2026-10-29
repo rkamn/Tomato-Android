@@ -78,16 +78,341 @@ function Metric({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+function formatStatusLabel(s: string): string {
+  const map: Record<string, string> = {
+    placed: 'Order Placed',
+    accepted: 'Accepted by Store',
+    preparing: 'In Preparation',
+    ready_for_pickup: 'Ready for Pickup',
+    out_for_delivery: 'Out for Delivery',
+    in_transit: 'In Transit',
+    delivered: 'Delivered',
+    completed: 'Completed',
+    cancelled: 'Cancelled',
+    rejected: 'Rejected',
+  };
+  return map[s.toLowerCase()] || s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function getStatusColor(s: string): { bg: string; dot: string; text: string } {
+  const lower = s.toLowerCase();
+  if (lower.includes('deliver') || lower.includes('complete')) {
+    return { bg: '#dcfce7', dot: '#16a34a', text: '#15803d' };
+  }
+  if (lower.includes('cancel') || lower.includes('reject')) {
+    return { bg: '#fee2e2', dot: '#dc2626', text: '#b91c1c' };
+  }
+  if (lower.includes('prep') || lower.includes('cook') || lower.includes('accept')) {
+    return { bg: '#dbeafe', dot: '#2563eb', text: '#1d4ed8' };
+  }
+  if (lower.includes('out') || lower.includes('transit') || lower.includes('ready')) {
+    return { bg: '#fef3c7', dot: '#d97706', text: '#b45309' };
+  }
+  return { bg: '#f1f5f9', dot: '#64748b', text: '#475569' };
+}
+
+function parseStatusList(value: unknown): Array<{ status: string; count: number }> {
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const obj = asRecord(item);
+      return {
+        status: String(obj.status || obj.name || obj.label || 'Unknown'),
+        count: Number(obj.count || obj.total || obj.orders || 0),
+      };
+    }).filter((i) => i.count > 0);
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).map(([status, count]) => ({
+      status,
+      count: Number(count) || 0,
+    })).filter((i) => i.count > 0);
+  }
+  return [];
+}
+
+function parsePaymentDist(value: unknown): {
+  codAmount: number;
+  codCount: number;
+  onlineAmount: number;
+  onlineCount: number;
+} {
+  const res = { codAmount: 0, codCount: 0, onlineAmount: 0, onlineCount: 0 };
+  if (!value || typeof value !== 'object') return res;
+  const obj = value as Record<string, unknown>;
+
+  if (obj.codAmount !== undefined || obj.onlineAmount !== undefined) {
+    res.codAmount = Number(obj.codAmount || 0);
+    res.codCount = Number(obj.codCount || obj.codOrders || 0);
+    res.onlineAmount = Number(obj.onlineAmount || 0);
+    res.onlineCount = Number(obj.onlineCount || obj.onlineOrders || 0);
+    return res;
+  }
+
+  for (const [k, v] of Object.entries(obj)) {
+    const key = k.toLowerCase();
+    const num = Number(v) || 0;
+    if (key.includes('cod') || key.includes('cash')) {
+      res.codAmount += num;
+      res.codCount += 1;
+    } else {
+      res.onlineAmount += num;
+      res.onlineCount += 1;
+    }
+  }
+  return res;
+}
+
+function parseCodDetails(value: unknown): {
+  collected: number;
+  inTransit: number;
+  total: number;
+} {
+  const res = { collected: 0, inTransit: 0, total: 0 };
+  if (!value || typeof value !== 'object') return res;
+  const obj = value as Record<string, unknown>;
+  res.collected = Number(obj.collected || obj.settled || obj.cashCollected || 0);
+  res.inTransit = Number(obj.inTransit || obj.pending || obj.riderCash || 0);
+  res.total = Number(obj.total || res.collected + res.inTransit);
+  return res;
+}
+
+function parseTopItems(value: unknown): Array<{ name: string; count: number; revenue?: number }> {
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const obj = asRecord(item);
+      return {
+        name: String(obj.name || obj.title || obj.dish || 'Item'),
+        count: Number(obj.count || obj.orders || obj.quantity || obj.units || 0),
+        revenue: obj.revenue !== undefined || obj.amount !== undefined ? Number(obj.revenue ?? obj.amount) : undefined,
+      };
+    }).filter((i) => i.count > 0).slice(0, 5);
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).map(([name, count]) => ({
+      name,
+      count: Number(count) || 0,
+    })).filter((i) => i.count > 0).slice(0, 5);
+  }
+  return [];
+}
+
+function parseTopStores(value: unknown): Array<{ name: string; orders: number; gmv?: number }> {
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const obj = asRecord(item);
+      return {
+        name: String(obj.name || obj.restaurantName || obj.shopName || obj.storeName || 'Store'),
+        orders: Number(obj.orders || obj.count || 0),
+        gmv: obj.gmv !== undefined || obj.totalAmount !== undefined || obj.revenue !== undefined
+          ? Number(obj.gmv ?? obj.totalAmount ?? obj.revenue)
+          : undefined,
+      };
+    }).filter((i) => i.orders > 0 || (i.gmv !== undefined && i.gmv > 0)).slice(0, 5);
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).map(([name, val]) => ({
+      name,
+      orders: typeof val === 'number' ? val : Number(asRecord(val).orders || 0),
+      gmv: typeof val === 'object' ? Number(asRecord(val).gmv || asRecord(val).totalAmount || 0) : undefined,
+    })).filter((i) => i.orders > 0 || (i.gmv !== undefined && i.gmv > 0)).slice(0, 5);
+  }
+  return [];
+}
+
+function getPresetDates(preset: string): { startDate: string; endDate: string } {
+  const today = new Date();
+  const format = (d: Date) => d.toISOString().split('T')[0];
+  const endDate = format(today);
+
+  if (preset === 'today') {
+    return { startDate: endDate, endDate };
+  }
+  if (preset === '7d') {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return { startDate: format(d), endDate };
+  }
+  if (preset === '30d') {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return { startDate: format(d), endDate };
+  }
+  return { startDate: '', endDate: '' };
+}
+
+function synthesizeAnalytics(
+  apiRes: RecordValue,
+  dashRes: RecordValue,
+  ordersList: RecordValue[],
+  range: { startDate: string; endDate: string },
+  dashboardData?: RecordValue | null,
+): RecordValue {
+  const apiAnalytics = asRecord(apiRes.analytics || apiRes.data || apiRes.stats || apiRes.kpis || apiRes);
+  const dashKpis = asRecord(dashRes.kpis || dashboardData?.kpis);
+  const dashStatus = asRecord(dashRes.ordersByStatus || dashboardData?.ordersByStatus);
+
+  const filteredOrders = (range.startDate && range.endDate)
+    ? ordersList.filter((o) => {
+        const created = String(o.createdAt || o.date || '').split('T')[0];
+        return created >= range.startDate && created <= range.endDate;
+      })
+    : ordersList;
+
+  const orderCount = filteredOrders.length;
+  const gmvTotal = filteredOrders.reduce((sum, o) => sum + (Number(o.totalAmount || o.amount) || 0), 0);
+  const deliveredOrders = filteredOrders.filter((o) =>
+    ['delivered', 'completed'].includes(String(o.status || '').toLowerCase()),
+  );
+  const activeOrders = filteredOrders.filter((o) =>
+    ['placed', 'accepted', 'preparing', 'ready_for_pickup', 'out_for_delivery', 'in_transit'].includes(
+      String(o.status || '').toLowerCase(),
+    ),
+  );
+  const cancelledOrders = filteredOrders.filter((o) =>
+    ['cancelled', 'rejected'].includes(String(o.status || '').toLowerCase()),
+  );
+
+  const statusMap: Record<string, number> = {};
+  filteredOrders.forEach((o) => {
+    const s = String(o.status || 'placed').toLowerCase();
+    statusMap[s] = (statusMap[s] || 0) + 1;
+  });
+
+  const paymentDist = { codAmount: 0, codCount: 0, onlineAmount: 0, onlineCount: 0 };
+  const topDishesMap: Record<string, { name: string; count: number; revenue: number }> = {};
+  const topRestaurantsMap: Record<string, { name: string; orders: number; gmv: number }> = {};
+  let codCollected = 0;
+  let codInTransit = 0;
+
+  filteredOrders.forEach((o) => {
+    const amount = Number(o.totalAmount || o.amount) || 0;
+    const isCod = o.paymentMethod === 'cod' || o.isCashOnDelivery || String(o.paymentType || '').toLowerCase() === 'cod';
+    if (isCod) {
+      paymentDist.codAmount += amount;
+      paymentDist.codCount += 1;
+      if (['delivered', 'completed'].includes(String(o.status || '').toLowerCase())) {
+        codCollected += amount;
+      } else if (['out_for_delivery', 'in_transit'].includes(String(o.status || '').toLowerCase())) {
+        codInTransit += amount;
+      }
+    } else {
+      paymentDist.onlineAmount += amount;
+      paymentDist.onlineCount += 1;
+    }
+
+    const restName = String(o.restaurantName || o.shopName || o.storeName || 'Store');
+    if (!topRestaurantsMap[restName]) {
+      topRestaurantsMap[restName] = { name: restName, orders: 0, gmv: 0 };
+    }
+    topRestaurantsMap[restName].orders += 1;
+    topRestaurantsMap[restName].gmv += amount;
+
+    if (Array.isArray(o.items)) {
+      o.items.forEach((item: any) => {
+        const iName = String(item?.name || item?.title || item?.dish || 'Item');
+        const iQty = Number(item?.quantity || item?.count || 1);
+        const iPrice = Number(item?.price || 0) * iQty;
+        if (!topDishesMap[iName]) {
+          topDishesMap[iName] = { name: iName, count: 0, revenue: 0 };
+        }
+        topDishesMap[iName].count += iQty;
+        topDishesMap[iName].revenue += iPrice;
+      });
+    }
+  });
+
+  const totalGMV = apiAnalytics.totalGMV
+    ?? apiAnalytics.totalRevenue
+    ?? dashKpis.totalRevenue
+    ?? (gmvTotal > 0 ? gmvTotal : 0);
+
+  const periodGMV = apiAnalytics.periodGMV
+    ?? (range.startDate ? gmvTotal : (dashKpis.todayRevenue ?? apiAnalytics.todayRevenue ?? totalGMV));
+
+  const lifetimeGMV = apiAnalytics.lifetimeGMV ?? totalGMV;
+
+  const totalOrdersCount = apiAnalytics.totalOrdersCount
+    ?? apiAnalytics.totalOrders
+    ?? dashKpis.totalOrders
+    ?? (orderCount > 0 ? orderCount : 0);
+
+  const deliveredOrdersCount = apiAnalytics.deliveredOrdersCount
+    ?? apiAnalytics.deliveredOrders
+    ?? dashKpis.deliveredOrders
+    ?? (deliveredOrders.length > 0 ? deliveredOrders.length : 0);
+
+  const activeOrdersCount = apiAnalytics.activeOrdersCount
+    ?? apiAnalytics.activeOrders
+    ?? dashKpis.activeOrders
+    ?? (activeOrders.length > 0 ? activeOrders.length : 0);
+
+  const cancelledOrdersCount = apiAnalytics.cancelledOrdersCount
+    ?? apiAnalytics.cancelledOrders
+    ?? (cancelledOrders.length > 0 ? cancelledOrders.length : 0);
+
+  const fulfillmentRate = apiAnalytics.fulfillmentRate
+    ?? (Number(totalOrdersCount) > 0
+      ? `${Math.round(((Number(deliveredOrdersCount) || 0) / Number(totalOrdersCount)) * 100)}%`
+      : '100%');
+
+  const avgOrderValue = apiAnalytics.avgOrderValue
+    ?? (Number(totalOrdersCount) > 0 && Number(totalGMV) > 0
+      ? Math.round(Number(totalGMV) / Number(totalOrdersCount))
+      : 0);
+
+  const totalUnitsSold = apiAnalytics.totalUnitsSold
+    ?? (filteredOrders.reduce((sum, o) => sum + (Array.isArray(o.items) ? o.items.length : 1), 0));
+
+  const ordersByStatus = apiAnalytics.ordersByStatus
+    ?? (Object.keys(dashStatus).length > 0 ? dashStatus : statusMap);
+
+  const paymentDistribution = apiAnalytics.paymentDistribution ?? paymentDist;
+
+  const codDetails = apiAnalytics.codDetails ?? {
+    collected: codCollected,
+    inTransit: codInTransit,
+    total: codCollected + codInTransit,
+  };
+
+  const topDishes = apiAnalytics.topDishes
+    ?? Object.values(topDishesMap).sort((a, b) => b.count - a.count).slice(0, 5);
+
+  const topRestaurants = apiAnalytics.topRestaurants
+    ?? Object.values(topRestaurantsMap).sort((a, b) => b.gmv - a.gmv).slice(0, 5);
+
+  return {
+    analytics: {
+      totalGMV,
+      periodGMV,
+      lifetimeGMV,
+      totalOrdersCount,
+      deliveredOrdersCount,
+      activeOrdersCount,
+      cancelledOrdersCount,
+      fulfillmentRate,
+      avgOrderValue,
+      totalUnitsSold,
+      ordersByStatus,
+      paymentDistribution,
+      codDetails,
+      topDishes,
+      topRestaurants,
+    },
+  };
+}
+
 export default function AdminOperations({
   session,
   section,
   canManage,
   canTransfer,
+  dashboardData,
 }: {
   session: Session;
   section: AdminOperationSection;
   canManage: boolean;
   canTransfer: boolean;
+  dashboardData?: RecordValue | null;
 }) {
   const [data, setData] = useState<RecordValue>({});
   const [loading, setLoading] = useState(true);
@@ -96,6 +421,7 @@ export default function AdminOperations({
   const [bankMode, setBankMode] = useState<'partners' | 'settlements'>('partners');
   const [editingCouponId, setEditingCouponId] = useState('');
   const [analyticsRange, setAnalyticsRange] = useState({ startDate: '', endDate: '' });
+  const [selectedPeriod, setSelectedPeriod] = useState<'all' | 'today' | '7d' | '30d'>('all');
   const [agreementDraft, setAgreementDraft] = useState({
     paymentId: '',
     riderPayoutAmount: '',
@@ -128,12 +454,13 @@ export default function AdminOperations({
     validUntil: '',
   });
 
-  async function load() {
+  async function load(customRange?: { startDate: string; endDate: string }) {
     setLoading(true);
     setError('');
+    const effectiveRange = customRange || analyticsRange;
     if (
       section === 'analytics'
-      && Boolean(analyticsRange.startDate) !== Boolean(analyticsRange.endDate)
+      && Boolean(effectiveRange.startDate) !== Boolean(effectiveRange.endDate)
     ) {
       setError('Enter both analytics dates, or leave both blank for all-time analytics.');
       setLoading(false);
@@ -141,9 +468,9 @@ export default function AdminOperations({
     }
     if (
       section === 'analytics'
-      && analyticsRange.startDate
-      && (!/^\d{4}-\d{2}-\d{2}$/.test(analyticsRange.startDate)
-        || !/^\d{4}-\d{2}-\d{2}$/.test(analyticsRange.endDate))
+      && effectiveRange.startDate
+      && (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveRange.startDate)
+        || !/^\d{4}-\d{2}-\d{2}$/.test(effectiveRange.endDate))
     ) {
       setError('Enter analytics dates in YYYY-MM-DD format.');
       setLoading(false);
@@ -162,13 +489,38 @@ export default function AdminOperations({
         result = asRecord(await apiRequest<unknown>('/api/admin/coupons', session.token));
       } else {
         const query = new URLSearchParams();
-        if (analyticsRange.startDate && analyticsRange.endDate) {
-          query.set('startDate', analyticsRange.startDate);
-          query.set('endDate', analyticsRange.endDate);
+        if (effectiveRange.startDate && effectiveRange.endDate) {
+          query.set('startDate', effectiveRange.startDate);
+          query.set('endDate', effectiveRange.endDate);
         } else {
           query.set('allTime', 'true');
         }
-        result = asRecord(await apiRequest<unknown>(`/api/admin/analytics?${query.toString()}`, session.token));
+
+        let analyticsRes: RecordValue = {};
+        try {
+          analyticsRes = asRecord(await apiRequest<unknown>(`/api/admin/analytics?${query.toString()}`, session.token));
+        } catch {
+          try {
+            analyticsRes = asRecord(await apiRequest<unknown>('/api/admin/analytics', session.token));
+          } catch {
+            analyticsRes = {};
+          }
+        }
+
+        let dashRes: RecordValue = {};
+        let ordersList: RecordValue[] = [];
+        try {
+          const [dash, ord] = await Promise.all([
+            apiRequest<{ kpis?: Record<string, number>; ordersByStatus?: Record<string, number> }>('/api/admin/dashboard', session.token).catch(() => null),
+            apiRequest<{ orders?: Array<Record<string, unknown>> }>('/api/admin/orders?limit=100', session.token).catch(() => null),
+          ]);
+          if (dash) dashRes = asRecord(dash);
+          if (ord?.orders) ordersList = asList(ord.orders);
+        } catch {
+          // Ignore secondary failures
+        }
+
+        result = synthesizeAnalytics(analyticsRes, dashRes, ordersList, effectiveRange, dashboardData);
       }
       setData(result);
     } catch (reason) {
@@ -177,6 +529,13 @@ export default function AdminOperations({
     } finally {
       setLoading(false);
     }
+  }
+
+  function applyPresetPeriod(key: 'all' | 'today' | '7d' | '30d') {
+    setSelectedPeriod(key);
+    const range = getPresetDates(key);
+    setAnalyticsRange(range);
+    void load(range);
   }
 
   useEffect(() => {
@@ -700,43 +1059,287 @@ export default function AdminOperations({
           )}
           {section === 'analytics' && (
             <View>
+              {/* Filter Card with Presets and Custom Range */}
               <View style={styles.card}>
-                <Text style={styles.cardTitle}>Analytics date range</Text>
-                <TextInput style={styles.input} placeholder="Start date (YYYY-MM-DD)" autoCapitalize="none" value={analyticsRange.startDate} onChangeText={(value) => setAnalyticsRange((current) => ({ ...current, startDate: value }))} />
-                <TextInput style={styles.input} placeholder="End date (YYYY-MM-DD)" autoCapitalize="none" value={analyticsRange.endDate} onChangeText={(value) => setAnalyticsRange((current) => ({ ...current, endDate: value }))} />
-                <Pressable style={styles.secondaryButton} onPress={() => void load()}>
-                  <Text style={styles.secondaryText}>Apply date range</Text>
-                </Pressable>
-              </View>
-              <View style={styles.metrics}>
-                {[
-                  ['Total GMV', analytics.totalGMV],
-                  ['Period GMV', analytics.periodGMV],
-                  ['Lifetime GMV', analytics.lifetimeGMV],
-                  ['Period orders', analytics.periodOrdersCount],
-                  ['All orders', analytics.totalOrdersCount],
-                  ['Delivered', analytics.deliveredOrdersCount],
-                  ['Active', analytics.activeOrdersCount],
-                  ['Cancelled', analytics.cancelledOrdersCount],
-                  ['Fulfillment', analytics.fulfillmentRate],
-                  ['Average order', analytics.avgOrderValue],
-                  ['Units sold', analytics.totalUnitsSold],
-                ].map(([label, value]) => (
-                  <Metric key={String(label)} label={String(label)} value={String(label).includes('GMV') || String(label).includes('Average') ? money(value) : value} />
-                ))}
-              </View>
-              {[
-                ['Orders by status', analytics.ordersByStatus],
-                ['Payment distribution', analytics.paymentDistribution],
-                ['COD details', analytics.codDetails],
-                ['Top dishes', analytics.topDishes],
-                ['Top restaurants', analytics.topRestaurants],
-              ].map(([title, value]) => (
-                <View key={String(title)} style={styles.card}>
-                  <Text style={styles.cardTitle}>{String(title)}</Text>
-                  <Text style={styles.muted}>{JSON.stringify(value ?? {})}</Text>
+                <View style={styles.analyticsTitleRow}>
+                  <Text style={styles.cardTitle}>Analytics date range</Text>
+                  <View style={styles.liveBadge}>
+                    <Text style={styles.liveBadgeDot}>●</Text>
+                    <Text style={styles.liveBadgeText}>LIVE TELEMETRY</Text>
+                  </View>
                 </View>
-              ))}
+                <Text style={styles.analyticsSubhint}>
+                  Filter platform GMV, fulfillment and order distribution.
+                </Text>
+
+                {/* Preset Chips */}
+                <View style={styles.presetFilterRow}>
+                  {(
+                    [
+                      ['all', 'All Time'],
+                      ['today', 'Today'],
+                      ['7d', 'Last 7 Days'],
+                      ['30d', 'Last 30 Days'],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <Pressable
+                      key={key}
+                      onPress={() => applyPresetPeriod(key)}
+                      style={[
+                        styles.presetFilterChip,
+                        selectedPeriod === key && styles.presetFilterChipActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.presetFilterChipText,
+                          selectedPeriod === key && styles.presetFilterChipTextActive,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                {/* Custom Date Inputs Fixed Horizontally */}
+                <View style={styles.horizontalDateRangeRow}>
+                  <TextInput
+                    style={styles.horizontalDateInput}
+                    placeholder="Start (YYYY-MM-DD)"
+                    placeholderTextColor="#9ca3af"
+                    autoCapitalize="none"
+                    value={analyticsRange.startDate}
+                    onChangeText={(value) => {
+                      setSelectedPeriod('all');
+                      setAnalyticsRange((current) => ({ ...current, startDate: value }));
+                    }}
+                  />
+                  <Text style={styles.horizontalDateTo}>to</Text>
+                  <TextInput
+                    style={styles.horizontalDateInput}
+                    placeholder="End (YYYY-MM-DD)"
+                    placeholderTextColor="#9ca3af"
+                    autoCapitalize="none"
+                    value={analyticsRange.endDate}
+                    onChangeText={(value) => {
+                      setSelectedPeriod('all');
+                      setAnalyticsRange((current) => ({ ...current, endDate: value }));
+                    }}
+                  />
+                  <Pressable style={styles.horizontalApplyBtn} onPress={() => void load()}>
+                    <Text style={styles.horizontalApplyText}>Apply</Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              {/* Key Platform KPIs Grid */}
+              <Text style={styles.analyticsSectionHeading}>SALES & PLATFORM PERFORMANCE</Text>
+              <View style={styles.analyticsKpiGrid}>
+                <View style={[styles.analyticsKpiCard, { backgroundColor: '#fff7ed', borderColor: '#fed7aa' }]}>
+                  <Text style={styles.kpiLabel}>Total Platform GMV</Text>
+                  <Text style={[styles.kpiValue, { color: '#c2410c' }]}>{money(analytics.totalGMV)}</Text>
+                  <Text style={styles.kpiSubhint}>Lifetime gross platform volume</Text>
+                </View>
+                <View style={[styles.analyticsKpiCard, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
+                  <Text style={styles.kpiLabel}>Period Sales Volume</Text>
+                  <Text style={[styles.kpiValue, { color: '#15803d' }]}>{money(analytics.periodGMV)}</Text>
+                  <Text style={styles.kpiSubhint}>{selectedPeriod === 'today' ? 'Today revenue' : 'In selected time range'}</Text>
+                </View>
+                <View style={[styles.analyticsKpiCard, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}>
+                  <Text style={styles.kpiLabel}>Total Orders</Text>
+                  <Text style={[styles.kpiValue, { color: '#1d4ed8' }]}>{text(analytics.totalOrdersCount, '0')}</Text>
+                  <Text style={styles.kpiSubhint}>Recorded order transactions</Text>
+                </View>
+                <View style={[styles.analyticsKpiCard, { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' }]}>
+                  <Text style={styles.kpiLabel}>Delivered Orders</Text>
+                  <Text style={[styles.kpiValue, { color: '#047857' }]}>{text(analytics.deliveredOrdersCount, '0')}</Text>
+                  <Text style={styles.kpiSubhint}>Fulfillment: {text(analytics.fulfillmentRate, '100%')}</Text>
+                </View>
+                <View style={[styles.analyticsKpiCard, { backgroundColor: '#faf5ff', borderColor: '#e9d5ff' }]}>
+                  <Text style={styles.kpiLabel}>Active Pipeline</Text>
+                  <Text style={[styles.kpiValue, { color: '#7e22ce' }]}>{text(analytics.activeOrdersCount, '0')}</Text>
+                  <Text style={styles.kpiSubhint}>In prep or out for delivery</Text>
+                </View>
+                <View style={[styles.analyticsKpiCard, { backgroundColor: '#fff1f2', borderColor: '#fecdd3' }]}>
+                  <Text style={styles.kpiLabel}>Cancelled Orders</Text>
+                  <Text style={[styles.kpiValue, { color: '#be123c' }]}>{text(analytics.cancelledOrdersCount, '0')}</Text>
+                  <Text style={styles.kpiSubhint}>Rejected or cancelled</Text>
+                </View>
+                <View style={[styles.analyticsKpiCard, { backgroundColor: '#fefce8', borderColor: '#fef08a' }]}>
+                  <Text style={styles.kpiLabel}>Avg. Order Value (AOV)</Text>
+                  <Text style={[styles.kpiValue, { color: '#a16207' }]}>{money(analytics.avgOrderValue)}</Text>
+                  <Text style={styles.kpiSubhint}>Per platform order</Text>
+                </View>
+                <View style={[styles.analyticsKpiCard, { backgroundColor: '#f0fdfa', borderColor: '#99f6e4' }]}>
+                  <Text style={styles.kpiLabel}>Items & Units Sold</Text>
+                  <Text style={[styles.kpiValue, { color: '#0f766e' }]}>{text(analytics.totalUnitsSold, '0')}</Text>
+                  <Text style={styles.kpiSubhint}>Dishes & products dispatched</Text>
+                </View>
+              </View>
+
+              {/* Orders by Status Card */}
+              {(() => {
+                const statusList = parseStatusList(analytics.ordersByStatus);
+                const totalOrd = Number(analytics.totalOrdersCount) || statusList.reduce((acc, s) => acc + s.count, 0) || 1;
+                return (
+                  <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Orders by Status Breakdown</Text>
+                    {statusList.length ? (
+                      <View style={styles.statusListWrap}>
+                        {statusList.map((item) => {
+                          const percent = Math.min(100, Math.round((item.count / totalOrd) * 100));
+                          const color = getStatusColor(item.status);
+                          return (
+                            <View key={item.status} style={styles.statusRow}>
+                              <View style={styles.statusRowHeader}>
+                                <View style={styles.statusDotWrap}>
+                                  <View style={[styles.statusDot, { backgroundColor: color.dot }]} />
+                                  <Text style={styles.statusName}>{formatStatusLabel(item.status)}</Text>
+                                </View>
+                                <View style={[styles.statusBadge, { backgroundColor: color.bg }]}>
+                                  <Text style={[styles.statusBadgeText, { color: color.text }]}>
+                                    {item.count} orders ({percent}%)
+                                  </Text>
+                                </View>
+                              </View>
+                              <View style={styles.progressBarTrack}>
+                                <View style={[styles.progressBarFill, { width: `${percent}%`, backgroundColor: color.dot }]} />
+                              </View>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    ) : (
+                      <Text style={styles.muted}>No status history recorded yet.</Text>
+                    )}
+                  </View>
+                );
+              })()}
+
+              {/* Payment Distribution Card */}
+              {(() => {
+                const dist = parsePaymentDist(analytics.paymentDistribution);
+                const totalRev = (dist.codAmount + dist.onlineAmount) || 1;
+                const codPct = Math.min(100, Math.round((dist.codAmount / totalRev) * 100));
+                const onlinePct = Math.min(100, Math.round((dist.onlineAmount / totalRev) * 100));
+                return (
+                  <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Payment Method Distribution</Text>
+                    <View style={styles.paymentDistWrap}>
+                      <View style={styles.paymentDistCard}>
+                        <View style={styles.paymentIconRow}>
+                          <Text style={styles.paymentIcon}>💵</Text>
+                          <View style={styles.flex}>
+                            <Text style={styles.paymentTypeTitle}>Cash on Delivery (COD)</Text>
+                            <Text style={styles.paymentAmount}>{money(dist.codAmount)}</Text>
+                          </View>
+                          <Text style={styles.paymentCountBadge}>{dist.codCount} orders ({codPct}%)</Text>
+                        </View>
+                        <View style={styles.progressBarTrack}>
+                          <View style={[styles.progressBarFill, { width: `${codPct}%`, backgroundColor: '#16a34a' }]} />
+                        </View>
+                      </View>
+
+                      <View style={styles.paymentDistCard}>
+                        <View style={styles.paymentIconRow}>
+                          <Text style={styles.paymentIcon}>💳</Text>
+                          <View style={styles.flex}>
+                            <Text style={styles.paymentTypeTitle}>Digital / Online Payments</Text>
+                            <Text style={styles.paymentAmount}>{money(dist.onlineAmount)}</Text>
+                          </View>
+                          <Text style={styles.paymentCountBadge}>{dist.onlineCount} orders ({onlinePct}%)</Text>
+                        </View>
+                        <View style={styles.progressBarTrack}>
+                          <View style={[styles.progressBarFill, { width: `${onlinePct}%`, backgroundColor: '#2563eb' }]} />
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })()}
+
+              {/* COD Details Card */}
+              {(() => {
+                const cod = parseCodDetails(analytics.codDetails);
+                return (
+                  <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Cash on Delivery (COD) Settlements</Text>
+                    <View style={styles.codSummaryRow}>
+                      <View style={styles.codMetricBox}>
+                        <Text style={styles.codMetricValue}>{money(cod.collected)}</Text>
+                        <Text style={styles.codMetricLabel}>Collected & Settled</Text>
+                      </View>
+                      <View style={styles.codMetricBox}>
+                        <Text style={[styles.codMetricValue, { color: '#d97706' }]}>{money(cod.inTransit)}</Text>
+                        <Text style={styles.codMetricLabel}>In Transit with Riders</Text>
+                      </View>
+                      <View style={styles.codMetricBox}>
+                        <Text style={[styles.codMetricValue, { color: '#2563eb' }]}>{money(cod.total)}</Text>
+                        <Text style={styles.codMetricLabel}>Total COD Handled</Text>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })()}
+
+              {/* Top Dishes Card */}
+              {(() => {
+                const dishes = parseTopItems(analytics.topDishes);
+                const medals = ['🥇', '🥈', '🥉', '4', '5'];
+                return (
+                  <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Top-Selling Dishes & Items</Text>
+                    {dishes.length ? (
+                      dishes.map((item, idx) => (
+                        <View key={`${item.name}-${idx}`} style={styles.rankItemRow}>
+                          <View style={[styles.rankBadge, idx === 0 ? styles.rankGold : idx === 1 ? styles.rankSilver : idx === 2 ? styles.rankBronze : styles.rankDefault]}>
+                            <Text style={styles.rankBadgeText}>{medals[idx] || `${idx + 1}`}</Text>
+                          </View>
+                          <View style={styles.flex}>
+                            <Text style={styles.rankName}>{item.name}</Text>
+                            <Text style={styles.rankMeta}>{item.count} orders sold</Text>
+                          </View>
+                          {item.revenue !== undefined && (
+                            <Text style={styles.rankAmount}>{money(item.revenue)}</Text>
+                          )}
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.muted}>No dishes data recorded yet.</Text>
+                    )}
+                  </View>
+                );
+              })()}
+
+              {/* Top Performing Restaurants Card */}
+              {(() => {
+                const stores = parseTopStores(analytics.topRestaurants);
+                const medals = ['🥇', '🥈', '🥉', '4', '5'];
+                return (
+                  <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Top Performing Restaurants & Shops</Text>
+                    {stores.length ? (
+                      stores.map((item, idx) => (
+                        <View key={`${item.name}-${idx}`} style={styles.rankItemRow}>
+                          <View style={[styles.rankBadge, idx === 0 ? styles.rankGold : idx === 1 ? styles.rankSilver : idx === 2 ? styles.rankBronze : styles.rankDefault]}>
+                            <Text style={styles.rankBadgeText}>{medals[idx] || `${idx + 1}`}</Text>
+                          </View>
+                          <View style={styles.flex}>
+                            <Text style={styles.rankName}>{item.name}</Text>
+                            <Text style={styles.rankMeta}>{item.orders} orders fulfilled</Text>
+                          </View>
+                          {item.gmv !== undefined && (
+                            <Text style={styles.rankAmount}>{money(item.gmv)}</Text>
+                          )}
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.muted}>No restaurant data recorded yet.</Text>
+                    )}
+                  </View>
+                );
+              })()}
             </View>
           )}
           <Pressable style={styles.secondaryButton} onPress={() => void load()}>
@@ -773,4 +1376,84 @@ const styles = StyleSheet.create({
   dangerText: { color: '#a9241c', fontWeight: '800', fontSize: 11 },
   error: { color: '#a9241c', backgroundColor: '#fae7e4', padding: 10, borderRadius: 9, marginBottom: 8 },
   loader: { marginTop: 25 },
+  flex: { flex: 1 },
+  analyticsTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  liveBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#dcfce7', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 },
+  liveBadgeDot: { fontSize: 8, color: '#16a34a' },
+  liveBadgeText: { fontSize: 9, fontWeight: '800', color: '#15803d', letterSpacing: 0.5 },
+  analyticsSubhint: { fontSize: 12, color: '#64748b', marginTop: 2, marginBottom: 10 },
+  presetFilterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 10 },
+  presetFilterChip: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 16, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
+  presetFilterChipActive: { backgroundColor: '#eff6ff', borderColor: '#2563eb' },
+  presetFilterChipText: { fontSize: 11, fontWeight: '700', color: '#64748b' },
+  presetFilterChipTextActive: { color: '#1d4ed8', fontWeight: '800' },
+  horizontalDateRangeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  horizontalDateInput: {
+    flex: 1,
+    minHeight: 40,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontSize: 12,
+    color: '#111827',
+  },
+  horizontalDateTo: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+    paddingHorizontal: 2,
+  },
+  horizontalApplyBtn: {
+    backgroundColor: '#2563eb',
+    borderRadius: 8,
+    paddingHorizontal: 13,
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  horizontalApplyText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  analyticsSectionHeading: { fontSize: 12, fontWeight: '800', color: '#475569', letterSpacing: 0.8, marginTop: 14, marginBottom: 8 },
+  analyticsKpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  analyticsKpiCard: { width: '48%', flexGrow: 1, borderRadius: 12, borderWidth: 1.2, padding: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 2, elevation: 1 },
+  kpiLabel: { fontSize: 11, fontWeight: '700', color: '#64748b', marginBottom: 2 },
+  kpiValue: { fontSize: 18, fontWeight: '900' },
+  kpiSubhint: { fontSize: 10, color: '#94a3b8', marginTop: 2 },
+  statusListWrap: { gap: 10, marginTop: 4 },
+  statusRow: { marginVertical: 3 },
+  statusRowHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
+  statusDotWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statusDot: { width: 7, height: 7, borderRadius: 3.5 },
+  statusName: { fontSize: 12, fontWeight: '700', color: '#1e293b' },
+  statusBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5 },
+  statusBadgeText: { fontSize: 10, fontWeight: '700' },
+  progressBarTrack: { height: 6, borderRadius: 3, backgroundColor: '#f1f5f9', overflow: 'hidden' },
+  progressBarFill: { height: 6, borderRadius: 3 },
+  paymentDistWrap: { gap: 8, marginTop: 4 },
+  paymentDistCard: { padding: 11, borderRadius: 10, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
+  paymentIconRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  paymentIcon: { fontSize: 20 },
+  paymentTypeTitle: { fontSize: 12, fontWeight: '700', color: '#1e293b' },
+  paymentAmount: { fontSize: 15, fontWeight: '800', color: '#0f172a', marginTop: 1 },
+  paymentCountBadge: { fontSize: 11, fontWeight: '700', color: '#64748b' },
+  codSummaryRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  codMetricBox: { flex: 1, padding: 11, borderRadius: 10, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center' },
+  codMetricValue: { fontSize: 16, fontWeight: '800', color: '#15803d' },
+  codMetricLabel: { fontSize: 10, fontWeight: '600', color: '#64748b', marginTop: 2, textAlign: 'center' },
+  rankItemRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  rankBadge: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  rankGold: { backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#fcd34d' },
+  rankSilver: { backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#cbd5e1' },
+  rankBronze: { backgroundColor: '#ffedd5', borderWidth: 1, borderColor: '#fed7aa' },
+  rankDefault: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
+  rankBadgeText: { fontSize: 13, fontWeight: '800' },
+  rankName: { fontSize: 13, fontWeight: '700', color: '#1e293b' },
+  rankMeta: { fontSize: 11, color: '#64748b', marginTop: 1 },
+  rankAmount: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
 });

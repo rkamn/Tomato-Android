@@ -15,14 +15,46 @@ import {
 import * as Location from 'expo-location';
 import { apiPath, apiRequest } from './api';
 import {
+  decodeDigipin,
   encodeDigipin,
   formatDigipin,
   isValidDigipin,
   normalizeDigipin,
   openMapplsMap,
 } from './digipin';
-import { getAccountDisplayId, getAccountIdLabel, getCustomerId } from './types';
+import { getAccountDisplayId, getAccountIdLabel, getCustomerId, isAdminUser } from './types';
 import type { Session, User } from './types';
+
+function formatPermissionLabel(perm: string): string {
+  const map: Record<string, string> = {
+    dashboard_view: 'Dashboard & KPIs',
+    orders_manage: 'Orders Fulfillment',
+    orders_view: 'Orders View',
+    complaints_manage: 'Complaints & Support',
+    support_manage: 'Support Tickets',
+    accounts_manage: 'Users & Stores',
+    restaurants_manage: 'Restaurants',
+    shops_manage: 'Shops & Stores',
+    riders_manage: 'Riders & Fleets',
+    customers_manage: 'Customers',
+    service_area_manage: 'Service Areas & Pincodes',
+    pincodes_manage: 'Pincodes',
+    team_manage: 'Team & Staff Roles',
+    subadmins_manage: 'Sub-Admins',
+    staff_manage: 'Staff Roles',
+    control_panel_manage: 'Platform Controls',
+    settings_manage: 'Platform Settings',
+    finance_manage: 'Finance & Ledger',
+    bank_manage: 'Bank & Payouts',
+    payouts_manage: 'Payouts',
+    billing_manage: 'Invoicing & Billing',
+    coupons_manage: 'Coupons & Promos',
+    marketing_manage: 'Marketing Campaigns',
+    analytics_manage: 'Platform Analytics',
+    reports_manage: 'Reports',
+  };
+  return map[perm] || perm.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export type ProfileMenuItem = {
   key: string;
@@ -494,6 +526,7 @@ export function ProfileSettingsModal({
   onSessionUserUpdate,
   roleLabel,
   onOverviewPress,
+  onNavigate,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -501,6 +534,7 @@ export function ProfileSettingsModal({
   onSessionUserUpdate?: (user: User) => Promise<void>;
   roleLabel?: string;
   onOverviewPress?: () => void;
+  onNavigate?: (key: string) => void;
 }) {
   const [profile, setProfile] = useState(() => initialProfile(session?.user));
   const [busy, setBusy] = useState(false);
@@ -567,12 +601,19 @@ export function ProfileSettingsModal({
       setLocatingDigipin(false);
     }
   }
-  const roleDisplay = session?.user?.role === 'customer'
+  const isAdmin = isAdminUser(session?.user || {});
+  const isSuperAdmin = session?.user?.role === 'superadmin' || session?.user?.isSuperAdmin === true;
+  const isSubAdmin = session?.user?.role === 'subadmin';
+  const userPermissions = session?.user?.permissions || [];
+
+  const roleDisplay = isAdmin
+    ? session?.user?.adminRoleTitle || (isSuperAdmin ? 'Super Admin' : isSubAdmin ? 'Sub-Admin' : 'Platform Admin')
+    : session?.user?.role === 'customer'
     ? 'Customer'
     : (session?.user?.role ? session.user.role.charAt(0).toUpperCase() + session.user.role.slice(1) : 'Customer');
 
   const isPartner = session?.user?.role === 'restaurant' || session?.user?.role === 'shop';
-  const isRider = session?.user?.role === 'deliveryPartner' || session?.user?.role === 'rider';
+  const isRider = session?.user?.role === 'deliveryPartner' || session?.user?.role === 'rider' || (roleLabel || '').toLowerCase().includes('delivery') || (roleLabel || '').toLowerCase().includes('rider');
 
   async function saveProfile() {
     const name = profile.name.trim();
@@ -580,8 +621,8 @@ export function ProfileSettingsModal({
       setError('Full Name is required.');
       return;
     }
-    const cleanDigipin = normalizeDigipin(profile.digipin);
-    if (cleanDigipin && !isValidDigipin(cleanDigipin)) {
+    const cleanDigipin = isAdmin ? '' : normalizeDigipin(profile.digipin);
+    if (!isAdmin && cleanDigipin && !isValidDigipin(cleanDigipin)) {
       setError('Enter a valid DIGIPIN (e.g. 10 alphanumeric characters).');
       return;
     }
@@ -593,7 +634,15 @@ export function ProfileSettingsModal({
       ...(profile.photo.trim() !== (session.user.profilePhoto || session.user.photo || session.user.avatar || session.user.image || '')
         ? { profilePhoto: profile.photo.trim(), photo: profile.photo.trim(), avatar: profile.photo.trim() }
         : {}),
-      ...(cleanDigipin !== (session.user.digipin || '') ? { digipin: cleanDigipin } : {}),
+      ...(!isAdmin && cleanDigipin !== (session.user.digipin || '') ? {
+        digipin: cleanDigipin,
+        ...(decodeDigipin(cleanDigipin) ? {
+          location: {
+            type: 'Point',
+            coordinates: [decodeDigipin(cleanDigipin)!.lng, decodeDigipin(cleanDigipin)!.lat],
+          },
+        } : {}),
+      } : {}),
       ...(profile.gsnNumber !== (session.user.gsnNumber || '') ? { gsnNumber: profile.gsnNumber } : {}),
       ...(isPartner && profile.address !== (session.user.address || session.user.restaurantAddress || session.user.shopAddress || '')
         ? session.user.role === 'shop' ? { shopAddress: profile.address } : { restaurantAddress: profile.address }
@@ -747,9 +796,19 @@ export function ProfileSettingsModal({
           <View style={styles.sheetHeader}>
             <View style={styles.identity}>
               <Text style={styles.sheetTitle} numberOfLines={2}>
-                Account & Profile settings{isPartner ? '' : ` ${accountId}`}
+                {isAdmin
+                  ? 'Admin Profile & Security'
+                  : isRider
+                    ? 'Rider Profile'
+                    : `Account & Profile settings${isPartner ? '' : ` ${accountId}`}`}
               </Text>
-              <Text style={styles.roleLabel}>Manage your personal details and account credentials.</Text>
+              <Text style={styles.roleLabel}>
+                {isAdmin
+                  ? 'Manage administrative credentials, security keys & capabilities.'
+                  : isRider
+                    ? 'Manage your rider identity, vehicle and credentials.'
+                    : 'Manage your personal details and account credentials.'}
+              </Text>
             </View>
             <Pressable accessibilityLabel="Close profile settings" onPress={onClose} style={styles.closeButton}>
               <Text style={styles.closeText}>×</Text>
@@ -758,12 +817,107 @@ export function ProfileSettingsModal({
           {Boolean(error) && <Text style={styles.error}>{error}</Text>}
 
           <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            {/* Admin Privilege & Capabilities Card */}
+            {isAdmin && (
+              <View style={styles.adminPrivilegeCard}>
+                <View style={styles.adminPrivilegeHeader}>
+                  <View style={styles.adminAvatarBox}>
+                    <Text style={styles.adminAvatarEmoji}>{isSuperAdmin ? '👑' : isSubAdmin ? '🛡️' : '⚡'}</Text>
+                  </View>
+                  <View style={styles.adminPrivilegeInfo}>
+                    <View style={styles.adminBadgeRow}>
+                      <View style={[
+                        styles.adminRoleBadge,
+                        isSuperAdmin ? styles.superAdminBadge : isSubAdmin ? styles.subAdminBadge : styles.platformAdminBadge
+                      ]}>
+                        <Text style={[
+                          styles.adminRoleBadgeText,
+                          isSuperAdmin ? styles.superAdminBadgeText : isSubAdmin ? styles.subAdminBadgeText : styles.platformAdminBadgeText
+                        ]}>
+                          {isSuperAdmin ? 'SUPER ADMIN' : isSubAdmin ? 'SUB-ADMIN' : 'PLATFORM ADMIN'}
+                        </Text>
+                      </View>
+                      <Text style={styles.adminIdTag}>{accountId}</Text>
+                    </View>
+                    <Text style={styles.adminTitleText}>
+                      {session?.user?.adminRoleTitle || (isSuperAdmin ? 'Executive Platform Administrator' : isSubAdmin ? 'Operations Sub-Admin' : 'Platform Administrator')}
+                    </Text>
+                    <Text style={styles.adminLevelText}>
+                      {isSuperAdmin
+                        ? 'Full Unrestricted System Access · All 12 Workspaces'
+                        : isSubAdmin
+                          ? 'Role-Scoped Operations Access'
+                          : 'Administrative Management Access'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.adminPermDivider} />
+
+                <Text style={styles.adminPermTitle}>AUTHORIZED CAPABILITIES & ROLES</Text>
+                <View style={styles.adminPermChipsWrap}>
+                  {isSuperAdmin ? (
+                    <View style={styles.adminPermSuperChip}>
+                      <Text style={styles.adminPermSuperChipText}>✓ All 12 Workspaces & Root Controls Authorized</Text>
+                    </View>
+                  ) : userPermissions.length > 0 ? (
+                    userPermissions.map((perm) => (
+                      <View key={perm} style={styles.adminPermChip}>
+                        <Text style={styles.adminPermChipText}>✓ {formatPermissionLabel(perm)}</Text>
+                      </View>
+                    ))
+                  ) : (
+                    <View style={styles.adminPermChip}>
+                      <Text style={styles.adminPermChipText}>✓ Core Operations Authorized</Text>
+                    </View>
+                  )}
+                </View>
+
+                {/* Operating Location & Control Panel Quick Link */}
+                <View style={{ marginTop: 14, backgroundColor: '#fdf4f3', borderRadius: 12, borderWidth: 1, borderColor: '#fbcbc7', padding: 12 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 11, fontWeight: '800', color: '#b91c1c', letterSpacing: 0.8 }}>
+                      OPERATING LOCATION &amp; CONTROL PANEL
+                    </Text>
+                    <Text style={{ fontSize: 10, color: '#b91c1c', fontWeight: '700' }}>
+                      {isSuperAdmin ? 'Super Admin' : isSubAdmin ? 'Sub-Admin' : 'Admin'}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 12, color: '#6b7280', lineHeight: 17, marginBottom: 10 }}>
+                    Manage staff assignments, designated operating headquarters, role delegations and system security controls.
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Open Control Panel"
+                    onPress={() => {
+                      onClose();
+                      onNavigate?.('controlPanel');
+                    }}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      backgroundColor: '#d83a32',
+                      paddingVertical: 9,
+                      paddingHorizontal: 12,
+                      borderRadius: 9,
+                    }}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>
+                      Operating Location • Control Panel ↗
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            )}
+
             {/* "Spice Garden" / Shop Partner Account Tile */}
             {isPartner && (
               <View style={styles.partnerAccountCard}>
                 <View style={styles.partnerAvatarCircle}>
                   <Text style={styles.partnerAvatarText}>
-                    {((profile.name || session?.user?.name || (session?.user?.role === 'shop' ? 'Shop' : 'Restaurant')).trim()).charAt(0).toUpperCase()}
+                    {String(profile.name || session?.user?.name || (session?.user?.role === 'shop' ? 'Shop' : 'Restaurant')).trim().charAt(0).toUpperCase() || 'S'}
                   </Text>
                 </View>
                 <View style={styles.partnerAccountInfo}>
@@ -910,53 +1064,57 @@ export function ProfileSettingsModal({
               onChangeText={(dob) => setProfile((current) => ({ ...current, dob }))}
             />
 
-            {/* DIGIPIN (Digital Postal Index Number) */}
-            <View style={styles.fieldLabelRow}>
-              <Text style={styles.fieldLabel}>DIGIPIN (Digital Postal Index Number)</Text>
-              {Boolean(profile.digipin && isValidDigipin(profile.digipin)) && (
-                <Text style={styles.validDigipinBadge}>✓ VALID GRID</Text>
-              )}
-            </View>
-            <TextInput
-              autoCapitalize="characters"
-              placeholder="e.g. 4M8-9K2-T3P9"
-              style={styles.input}
-              value={profile.digipin}
-              onChangeText={(digipin) => setProfile((current) => ({ ...current, digipin: digipin.toUpperCase() }))}
-              onBlur={() => {
-                if (profile.digipin) {
-                  setProfile((current) => ({ ...current, digipin: formatDigipin(current.digipin) }));
-                }
-              }}
-            />
+            {/* DIGIPIN (Digital Postal Index Number) & Mappls Map */}
+            {!isAdmin && (
+              <>
+                <View style={styles.fieldLabelRow}>
+                  <Text style={styles.fieldLabel}>DIGIPIN (Digital Postal Index Number)</Text>
+                  {Boolean(profile.digipin && isValidDigipin(profile.digipin)) && (
+                    <Text style={styles.validDigipinBadge}>✓ VALID GRID</Text>
+                  )}
+                </View>
+                <TextInput
+                  autoCapitalize="characters"
+                  placeholder="e.g. 4M8-9K2-T3P9"
+                  style={styles.input}
+                  value={profile.digipin}
+                  onChangeText={(digipin) => setProfile((current) => ({ ...current, digipin: digipin.toUpperCase() }))}
+                  onBlur={() => {
+                    if (profile.digipin) {
+                      setProfile((current) => ({ ...current, digipin: formatDigipin(current.digipin) }));
+                    }
+                  }}
+                />
 
-            {/* Mappls Map Integration */}
-            <View style={styles.mapplsBox}>
-              <Text style={styles.mapplsInfoText}>
-                India Post & Mappls Map precision 4m × 4m doorstep geocode.
-              </Text>
-              <View style={styles.mapplsBtnRow}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Find DIGIPIN on Mappls Map"
-                  onPress={() => void openMapplsMap(profile.digipin)}
-                  style={styles.mapplsMapBtn}
-                >
-                  <Text style={styles.mapplsMapBtnText}>🗺️ Find on Mappls Map</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Auto-Detect DIGIPIN"
-                  disabled={locatingDigipin}
-                  onPress={() => void detectCurrentLocationDigipin()}
-                  style={[styles.detectGpsBtn, locatingDigipin && styles.disabled]}
-                >
-                  <Text style={styles.detectGpsBtnText}>
-                    {locatingDigipin ? 'Detecting…' : '📍 Auto-Detect DIGIPIN'}
+                {/* Mappls Map Integration */}
+                <View style={styles.mapplsBox}>
+                  <Text style={styles.mapplsInfoText}>
+                    India Post & Mappls Map precision 4m × 4m doorstep geocode.
                   </Text>
-                </Pressable>
-              </View>
-            </View>
+                  <View style={styles.mapplsBtnRow}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Find DIGIPIN on Mappls Map"
+                      onPress={() => void openMapplsMap(profile.digipin)}
+                      style={styles.mapplsMapBtn}
+                    >
+                      <Text style={styles.mapplsMapBtnText}>🗺️ Find on Mappls Map</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Auto-Detect DIGIPIN"
+                      disabled={locatingDigipin}
+                      onPress={() => void detectCurrentLocationDigipin()}
+                      style={[styles.detectGpsBtn, locatingDigipin && styles.disabled]}
+                    >
+                      <Text style={styles.detectGpsBtnText}>
+                        {locatingDigipin ? 'Detecting…' : '📍 Auto-Detect DIGIPIN'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </>
+            )}
 
             {(isPartner || isRider) && (
               <>
@@ -1169,6 +1327,10 @@ export default function ProfileAccess({
     : (session.user.name || session.user.displayName || '').trim().charAt(0).toUpperCase();
   const menuItems = items.filter((item) => item.key !== 'help' && item.key !== 'profile-settings');
   const accountId = getAccountDisplayId(session.user, roleLabel);
+  const isAdmin = isAdminUser(session.user);
+  const isSuperAdmin = session.user.role === 'superadmin' || session.user.isSuperAdmin === true;
+  const isSubAdmin = session.user.role === 'subadmin';
+  const isRider = session.user.role === 'deliveryPartner' || (roleLabel || '').toLowerCase().includes('delivery') || (roleLabel || '').toLowerCase().includes('rider');
 
   return (
     <>
@@ -1211,12 +1373,29 @@ export default function ProfileAccess({
         >
           <Pressable style={styles.menuCard} onPress={(e) => e.stopPropagation?.()}>
             <View style={styles.menuHeader}>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{initial || 'T'}</Text>
+              <View style={[styles.avatar, isAdmin && styles.adminAvatarCircle]}>
+                <Text style={styles.avatarText}>
+                  {isAdmin ? (isSuperAdmin ? '👑' : isSubAdmin ? '🛡️' : '⚡') : (initial || 'T')}
+                </Text>
               </View>
               <View style={styles.identity}>
-                <Text numberOfLines={1} style={styles.userName}>{session.user.name || 'Tomato user'}</Text>
-                <Text style={styles.roleLabel}>{roleLabel} · {accountId}</Text>
+                <View style={styles.adminTitleRow}>
+                  <Text numberOfLines={1} style={styles.userName}>{session.user.name || 'Tomato user'}</Text>
+                  {isAdmin && (
+                    <View style={[
+                      styles.adminRoleBadge,
+                      isSuperAdmin ? styles.superAdminBadge : isSubAdmin ? styles.subAdminBadge : styles.platformAdminBadge
+                    ]}>
+                      <Text style={[
+                        styles.adminRoleBadgeText,
+                        isSuperAdmin ? styles.superAdminBadgeText : isSubAdmin ? styles.subAdminBadgeText : styles.platformAdminBadgeText
+                      ]}>
+                        {isSuperAdmin ? '👑 SUPER ADMIN' : isSubAdmin ? '🛡️ SUB-ADMIN' : '⚡ ADMIN'}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.roleLabel}>{session.user.adminRoleTitle || roleLabel} · {accountId}</Text>
               </View>
               <Pressable
                 accessibilityLabel="Close profile menu"
@@ -1234,7 +1413,15 @@ export default function ProfileAccess({
                 <Pressable key={item.key} onPress={() => chooseItem(item)} style={styles.menuItem}>
                   {Boolean(item.icon) && <Text style={styles.menuItemIcon}>{item.icon}</Text>}
                   <View style={styles.menuItemBody}>
-                    <Text style={styles.menuItemLabel}>{item.label}</Text>
+                    <Text style={styles.menuItemLabel}>
+                      {item.label.includes('(') && item.label.includes(')') ? (
+                        <>
+                          {item.label.slice(0, item.label.indexOf('(')).trim()} (<Text style={{ color: '#16a34a', fontWeight: '800' }}>{item.label.slice(item.label.indexOf('(') + 1, item.label.indexOf(')'))}</Text>)
+                        </>
+                      ) : (
+                        item.label
+                      )}
+                    </Text>
                     {Boolean(item.description) && (
                       <Text style={styles.menuItemDescription}>{item.description}</Text>
                     )}
@@ -1251,11 +1438,49 @@ export default function ProfileAccess({
                 </View>
                 <Text style={styles.chevron}>›</Text>
               </Pressable>
-              <Pressable onPress={() => chooseItem({ key: 'profile-settings', label: 'Profile Settings', icon: '⚙', description: 'Account, DOB, photo & password security' })} style={styles.menuItem}>
-                <Text style={styles.menuItemIcon}>⚙</Text>
+              {isAdmin && (
+                <Pressable
+                  onPress={() => chooseItem({
+                    key: 'controlPanel',
+                    label: 'Control Panel',
+                    icon: '⚙️',
+                    description: 'Staff locations, delegated roles, employees & platform controls',
+                  })}
+                  style={styles.menuItem}
+                >
+                  <Text style={styles.menuItemIcon}>⚙️</Text>
+                  <View style={styles.menuItemBody}>
+                    <Text style={styles.menuItemLabel}>Control Panel</Text>
+                    <Text style={styles.menuItemDescription}>Staff locations, delegated roles, employees & platform controls</Text>
+                  </View>
+                  <Text style={styles.chevron}>›</Text>
+                </Pressable>
+              )}
+              <Pressable
+                onPress={() => chooseItem({
+                  key: 'profile-settings',
+                  label: isAdmin ? 'Admin Profile & Security' : isRider ? 'Rider Profile' : 'Profile Settings',
+                  icon: isAdmin ? '🛡️' : '⚙',
+                  description: isAdmin
+                    ? 'Admin credentials, capabilities & security keys'
+                    : isRider
+                      ? 'Rider profile, vehicle & account security'
+                      : 'Account, DOB, photo & password security'
+                })}
+                style={styles.menuItem}
+              >
+                <Text style={styles.menuItemIcon}>{isAdmin ? '🛡️' : '⚙'}</Text>
                 <View style={styles.menuItemBody}>
-                  <Text style={styles.menuItemLabel}>Profile Settings</Text>
-                  <Text style={styles.menuItemDescription}>Account & Profile settings, photo & security</Text>
+                  <Text style={styles.menuItemLabel}>
+                    {isAdmin ? 'Admin Profile & Security' : isRider ? 'Rider Profile' : 'Profile Settings'}
+                  </Text>
+                  <Text style={styles.menuItemDescription}>
+                    {isAdmin
+                      ? 'Admin credentials, capabilities & security keys'
+                      : isRider
+                        ? 'Rider profile, vehicle & account security'
+                        : 'Account & Profile settings, photo & security'}
+                  </Text>
                 </View>
                 <Text style={styles.chevron}>›</Text>
               </Pressable>
@@ -1321,6 +1546,7 @@ export default function ProfileAccess({
         onSessionUserUpdate={onSessionUserUpdate}
         roleLabel={roleLabel}
         onOverviewPress={() => onNavigate('overview')}
+        onNavigate={onNavigate}
       />
     </>
   );
@@ -1664,5 +1890,159 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     marginTop: 5,
+  },
+  adminTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  adminRoleBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  adminRoleBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  superAdminBadge: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#fcd34d',
+  },
+  superAdminBadgeText: {
+    color: '#92400e',
+  },
+  subAdminBadge: {
+    backgroundColor: '#ede9fe',
+    borderColor: '#c4b5fd',
+  },
+  subAdminBadgeText: {
+    color: '#5b21b6',
+  },
+  platformAdminBadge: {
+    backgroundColor: '#e0f2fe',
+    borderColor: '#7dd3fc',
+  },
+  platformAdminBadgeText: {
+    color: '#0369a1',
+  },
+  adminAvatarCircle: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+  },
+  adminPrivilegeCard: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
+    borderWidth: 1.5,
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 6,
+    marginBottom: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  adminPrivilegeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  adminAvatarBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#cbd5e1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  adminAvatarEmoji: {
+    fontSize: 22,
+  },
+  adminPrivilegeInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  adminBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+    flexWrap: 'wrap',
+  },
+  adminIdTag: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#475569',
+    backgroundColor: '#e2e8f0',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 5,
+  },
+  adminTitleText: {
+    color: '#0f172a',
+    fontWeight: '800',
+    fontSize: 16,
+  },
+  adminLevelText: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  adminPermDivider: {
+    height: 1,
+    backgroundColor: '#e2e8f0',
+    marginVertical: 12,
+  },
+  adminPermTitle: {
+    color: '#334155',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+    marginBottom: 8,
+  },
+  adminPermChipsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  adminPermChip: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  adminPermChipText: {
+    color: '#166534',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  adminPermSuperChip: {
+    backgroundColor: '#fefce8',
+    borderColor: '#fef08a',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  adminPermSuperChipText: {
+    color: '#854d0e',
+    fontSize: 11,
+    fontWeight: '800',
   },
 });

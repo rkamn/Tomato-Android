@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import { apiRequest } from './api';
-import { isValidDigipin, normalizeDigipin } from './digipin';
+import { decodeDigipin, isValidDigipin, normalizeDigipin } from './digipin';
 import { isAdminUser } from './types';
 import type { AccountRole, User } from './types';
 
@@ -106,12 +106,33 @@ export default function AuthScreen({ onAuthenticated }: Props) {
                 name: name.trim(),
                 role,
                 ...(role === 'restaurant'
-                  ? { restaurantAddress: pickupAddress.trim(), pincode: pincode.trim(), digipin: cleanDigipin }
+                  ? {
+                    restaurantAddress: pickupAddress.trim(),
+                    pincode: pincode.trim(),
+                    digipin: cleanDigipin,
+                    ...(decodeDigipin(cleanDigipin) ? {
+                      location: { type: 'Point', coordinates: [decodeDigipin(cleanDigipin)!.lng, decodeDigipin(cleanDigipin)!.lat] },
+                    } : {}),
+                  }
                   : {}),
                 ...(role === 'shop'
-                  ? { shopAddress: pickupAddress.trim(), pincode: pincode.trim(), digipin: cleanDigipin }
+                  ? {
+                    shopAddress: pickupAddress.trim(),
+                    pincode: pincode.trim(),
+                    digipin: cleanDigipin,
+                    ...(decodeDigipin(cleanDigipin) ? {
+                      location: { type: 'Point', coordinates: [decodeDigipin(cleanDigipin)!.lng, decodeDigipin(cleanDigipin)!.lat] },
+                    } : {}),
+                  }
                   : {}),
-                ...(role === 'customer' && cleanDigipin ? { digipin: cleanDigipin } : {}),
+                ...(role === 'customer' && cleanDigipin
+                  ? {
+                    digipin: cleanDigipin,
+                    ...(decodeDigipin(cleanDigipin) ? {
+                      location: { type: 'Point', coordinates: [decodeDigipin(cleanDigipin)!.lng, decodeDigipin(cleanDigipin)!.lat] },
+                    } : {}),
+                  }
+                  : {}),
                 ...(role === 'deliveryPartner' ? { deliveryVehicle: vehicle } : {}),
               }
               : {}),

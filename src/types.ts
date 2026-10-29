@@ -313,6 +313,19 @@ export type Order = {
   shopAddress?: string;
   customerName?: string;
   customerPhone?: string;
+  riderId?: string;
+  riderUserId?: string;
+  assignedRiderId?: string;
+  riderName?: string;
+  riderPhone?: string;
+  rider?: {
+    id?: string;
+    riderId?: string;
+    _id?: string;
+    name?: string;
+    displayName?: string;
+    phone?: string;
+  };
   isPickedUp?: boolean;
   pickupStatus?: string;
   expectedDeliveryTimingMinutes?: number;
@@ -383,3 +396,41 @@ export type CustomerNotification = {
   message?: string;
   createdAt?: string;
 };
+
+export function formatOrderNumber(orderOrNumber?: { orderNumber?: string | number; _id?: string } | string | number | null): string {
+  if (orderOrNumber === null || orderOrNumber === undefined) return '#000000';
+  let raw: string;
+  if (typeof orderOrNumber === 'object') {
+    const o = orderOrNumber as { orderNumber?: string | number; _id?: string };
+    if (o.orderNumber !== undefined && o.orderNumber !== null && String(o.orderNumber).trim() !== '') {
+      raw = String(o.orderNumber).trim();
+    } else if (o._id) {
+      raw = String(o._id).slice(-6).toUpperCase();
+    } else {
+      raw = '000000';
+    }
+  } else {
+    raw = String(orderOrNumber).trim();
+  }
+  if (!raw) raw = '000000';
+  return raw.startsWith('#') ? raw : `#${raw}`;
+}
+
+export function formatOrderStatus(status: unknown): string {
+  if (!status || typeof status !== 'string') return 'Placed';
+  const clean = String(status).trim();
+  if (!clean) return 'Placed';
+  return clean.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+export function getOrderStatusBadgeColors(status: unknown): { bg: string; text: string } {
+  const s = String(status || '').toLowerCase().trim();
+  if (s === 'delivered') return { bg: '#1b8742', text: '#ffffff' };
+  if (s === 'accepted' || s === 'accepted_by_rider') return { bg: '#dcfce7', text: '#15803d' };
+  if (s === 'ready_for_pickup' || s === 'pending') return { bg: '#fef08a', text: '#854d0e' };
+  if (s === 'cancelled') return { bg: '#fee2e2', text: '#991b1b' };
+  if (s === 'preparing') return { bg: '#eff6ff', text: '#1d4ed8' };
+  if (s === 'out_for_delivery' || s === 'in_transit' || s === 'picked_up') return { bg: '#f5f3ff', text: '#6d28d9' };
+  if (s === 'returned') return { bg: '#fef2f2', text: '#b91c1c' };
+  return { bg: '#fff0e5', text: '#9b541f' };
+}

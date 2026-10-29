@@ -44,6 +44,7 @@ export type GlobalHeaderProps = {
 
   // Additional Actions (e.g. Cart, Refresh)
   rightActions?: React.ReactNode;
+  profileBottomAction?: React.ReactNode;
 
   // Profile
   roleLabel: string;
@@ -68,6 +69,7 @@ export default function GlobalHeader({
   onNotificationPress,
   hasUnreadNotifications = false,
   rightActions,
+  profileBottomAction,
   roleLabel,
   profileMenuItems,
   onNavigateProfile,
@@ -174,23 +176,32 @@ export default function GlobalHeader({
     || labelRole.includes('subadmin')
     || labelRole.includes('superadmin');
 
+  const isSuperAdminUser =
+    rawRole === 'superadmin'
+    || labelRole.includes('superadmin')
+    || Boolean(session.user.isSuperAdmin)
+    || session.user.role === 'superadmin';
+
   // Formatted city, address & pincode
   const userCity = (
     city
-    || session.user.city
-    || (rawRole === 'restaurant' || labelRole.includes('restaurant') ? 'Bengaluru'
+    || (isSuperAdminUser ? (session.user.city && session.user.city.toLowerCase() !== 'pune' ? session.user.city : 'Bengaluru') : session.user.city)
+    || (isSuperAdminUser ? 'Bengaluru'
+      : rawRole === 'restaurant' || labelRole.includes('restaurant') ? 'Bengaluru'
       : rawRole === 'shop' || labelRole.includes('shop') ? 'Bengaluru'
-      : (rawRole === 'admin' || rawRole === 'subadmin' || rawRole === 'superadmin' || labelRole.includes('admin') || isAdminUser(session.user)) ? 'New Delhi'
+      : (rawRole === 'admin' || rawRole === 'subadmin' || labelRole.includes('admin') || isAdminUser(session.user)) ? 'New Delhi'
       : '')
   ).trim();
 
   const displayPincode = (
-    pincode
-    || session.user.pincode
-    || session.user.postalCode
-    || ((rawRole === 'restaurant' || labelRole.includes('restaurant') || rawRole === 'shop' || labelRole.includes('shop')) ? '560001'
-      : (rawRole === 'admin' || rawRole === 'subadmin' || rawRole === 'superadmin' || labelRole.includes('admin') || isAdminUser(session.user)) ? '110001'
-      : '')
+    isSuperAdminUser
+      ? (pincode === '411057' ? '560100' : (pincode || (session.user.pincode === '411057' ? '560100' : session.user.pincode) || '560100'))
+      : (pincode
+        || session.user.pincode
+        || session.user.postalCode
+        || ((rawRole === 'restaurant' || labelRole.includes('restaurant') || rawRole === 'shop' || labelRole.includes('shop')) ? '560001'
+          : (rawRole === 'admin' || rawRole === 'subadmin' || labelRole.includes('admin') || isAdminUser(session.user)) ? '110001'
+          : ''))
   ).trim();
 
   const displayAddress = addressText || (session.user.role === 'customer' ? 'Delivering to you' : 'Service area');
@@ -308,15 +319,22 @@ export default function GlobalHeader({
 
           {rightActions}
 
-          <ProfileAccess
-            session={session}
-            roleLabel={roleLabel}
-            iconOnly
-            items={profileMenuItems}
-            onNavigate={onNavigateProfile}
-            onSignOut={onSignOut}
-            onSessionUserUpdate={onSessionUserUpdate}
-          />
+          <View style={styles.profileColumn}>
+            <ProfileAccess
+              session={session}
+              roleLabel={roleLabel}
+              iconOnly
+              items={profileMenuItems}
+              onNavigate={onNavigateProfile}
+              onSignOut={onSignOut}
+              onSessionUserUpdate={onSessionUserUpdate}
+            />
+            {Boolean(profileBottomAction) && (
+              <View style={styles.profileBottomWrap}>
+                {profileBottomAction}
+              </View>
+            )}
+          </View>
         </View>
       </View>
     </View>
@@ -440,9 +458,17 @@ const styles = StyleSheet.create({
   },
   headerActions: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     alignSelf: 'flex-start',
     gap: 8,
+  },
+  profileColumn: {
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+  },
+  profileBottomWrap: {
+    marginTop: 4,
+    alignItems: 'flex-end',
   },
   iconButton: {
     width: 40,

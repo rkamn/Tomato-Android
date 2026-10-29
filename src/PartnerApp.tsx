@@ -15,12 +15,13 @@ import {
   View,
 } from 'react-native';
 import { apiRequest } from './api';
-import { formatDigipin } from './digipin';
+import { formatDigipin, resolveCustomerDigipin } from './digipin';
 import GlobalHeader from './GlobalHeader';
+import LiveRouteTracker from './LiveRouteTracker';
 import PartnerModules from './PartnerModules';
 import ProfileAccess from './ProfileAccess';
 import SignOutModal from './SignOutModal';
-import { getAccountDisplayId, getItemVariants, isOrderReturnAccepted } from './types';
+import { formatOrderNumber, getAccountDisplayId, getItemVariants, isOrderReturnAccepted } from './types';
 import type { ItemVariant, MenuItem, Order, Session, User } from './types';
 
 type PartnerRole = 'restaurant' | 'shop';
@@ -152,7 +153,7 @@ export default function PartnerApp({
       : 'Restaurant Orders';
   const isApproved = session.user.isApproved !== false;
   const [tab, setTab] = useState<PartnerTab>('orders');
-  type OrderFilter = 'all' | 'new' | 'in_progress' | 'out_for_delivery' | 'delivered_today';
+  type OrderFilter = 'all' | 'new' | 'in_progress' | 'out_for_delivery' | 'cancelled_today' | 'delivered_today';
   const [orderFilter, setOrderFilter] = useState<OrderFilter>('all');
   const [isOpen, setIsOpen] = useState(false);
   const [orders, setOrders] = useState<PartnerOrder[]>([]);
@@ -602,6 +603,19 @@ export default function PartnerApp({
       order.pickupStatus === 'picked_up'
     ) && s !== 'delivered' && s !== 'cancelled' && s !== 'returned';
   }).length;
+  const cancelledTodayCount = orders.filter((order) => {
+    const s = (order.status || '').toLowerCase();
+    if (s !== 'cancelled') return false;
+    const dateStr = (order as any).cancelledAt || order.updatedAt || order.createdAt;
+    if (!dateStr) return true;
+    const d = new Date(dateStr);
+    const now = new Date();
+    return (
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate()
+    );
+  }).length;
   const deliveredTodayCount = orders.filter((order) => {
     const s = (order.status || '').toLowerCase();
     if (s !== 'delivered') return false;
@@ -641,6 +655,19 @@ export default function PartnerApp({
           order.isPickedUp ||
           order.pickupStatus === 'picked_up'
         ) && s !== 'delivered' && s !== 'cancelled' && s !== 'returned';
+      }
+      if (orderFilter === 'cancelled_today') {
+        const s = (order.status || '').toLowerCase();
+        if (s !== 'cancelled') return false;
+        const dateStr = (order as any).cancelledAt || order.updatedAt || order.createdAt;
+        if (!dateStr) return true;
+        const d = new Date(dateStr);
+        const now = new Date();
+        return (
+          d.getFullYear() === now.getFullYear() &&
+          d.getMonth() === now.getMonth() &&
+          d.getDate() === now.getDate()
+        );
       }
       if (orderFilter === 'delivered_today') {
         const s = (order.status || '').toLowerCase();
@@ -721,7 +748,7 @@ export default function PartnerApp({
           },
           { key: 'coupons', label: 'Coupons & offers', description: 'Manage your promotions', icon: '％' },
           { key: 'finance', label: 'Finance', description: 'Finance & Transfer Ledger', icon: '₹' },
-          { key: 'account', label: 'Bank & Payouts', description: 'Manage bank details and payout records', icon: '🏦' },
+          { key: 'account', label: 'Finnance', description: '', icon: '🏦' },
         ]}
         onNavigateProfile={(key) => {
           if (key === 'overview') {
@@ -796,6 +823,13 @@ export default function PartnerApp({
                 onPress={() => setOrderFilter((prev) => (prev === 'out_for_delivery' ? 'all' : 'out_for_delivery'))}
               />
               <StatCard
+                label="Cancelled"
+                value={cancelledTodayCount}
+                tint="#fee2e2"
+                selected={orderFilter === 'cancelled_today'}
+                onPress={() => setOrderFilter((prev) => (prev === 'cancelled_today' ? 'all' : 'cancelled_today'))}
+              />
+              <StatCard
                 label="Delivered Today"
                 value={deliveredTodayCount}
                 tint="#dcfce7"
@@ -833,6 +867,11 @@ export default function PartnerApp({
                   isShop={isShop}
                   order={order}
                   onChange={(status) => void updateOrder(order, status)}
+                  sessionToken={session.token}
+                  partnerRole={partnerRole}
+                  storeName={session.user.name || (isShop ? 'Shop' : 'Spice Garden')}
+                  storeDigipin={session.user.digipin}
+                  storeAddress={session.user.restaurantAddress || session.user.shopAddress || session.user.address || ''}
                 />
               ))
             ) : (
@@ -841,7 +880,7 @@ export default function PartnerApp({
                 <Text style={styles.cardTitle}>
                   {orderFilter === 'all'
                     ? 'No orders yet'
-                    : `No ${orderFilter === 'new' ? 'new' : orderFilter === 'in_progress' ? 'in-progress' : orderFilter === 'out_for_delivery' ? 'out for delivery' : 'delivered today'} orders`}
+                    : `No ${orderFilter === 'new' ? 'new' : orderFilter === 'in_progress' ? 'in-progress' : orderFilter === 'out_for_delivery' ? 'out for delivery' : orderFilter === 'cancelled_today' ? 'cancelled today' : 'delivered today'} orders`}
                 </Text>
                 <Text style={styles.muted}>
                   {orderFilter === 'all'
@@ -1051,21 +1090,7 @@ export default function PartnerApp({
           </View>
         )}
 
-        {tab === 'account' && (
-          <View>
-            <Text style={styles.eyebrow}>{kind.toUpperCase()} ACCOUNT</Text>
-            <Text
-              style={styles.bankAgreementTitle}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.7}
-            >
-              🏦 Bank Details, PAN KYC & Payout Agreement
-            </Text>
-          </View>
-        )}
-
-        {(tab === 'coupons' || tab === 'finance') && (
+        {(tab === 'account' || tab === 'coupons' || tab === 'finance') && (
           <PartnerModules
             session={session}
             partnerRole={partnerRole}
@@ -1114,12 +1139,22 @@ function PartnerOrderCard({
   busy,
   canManage,
   onChange,
+  sessionToken,
+  partnerRole,
+  storeName,
+  storeDigipin,
+  storeAddress,
 }: {
   order: PartnerOrder;
   isShop: boolean;
   busy: boolean;
   canManage: boolean;
   onChange: (status: string) => void;
+  sessionToken?: string;
+  partnerRole?: PartnerRole;
+  storeName?: string;
+  storeDigipin?: string;
+  storeAddress?: string;
 }) {
   const status = order.status || 'placed';
   const actions = (statusActions[status] || []).map((action) => ({
@@ -1136,8 +1171,7 @@ function PartnerOrderCard({
   const returnAccepted = isOrderReturnAccepted(order);
   const itemNames = order.items?.map((item) => `${item.name}(${item.quantity || 1})`).join(', ');
   const address = order.deliveryAddress;
-  const rawOrderNumber = order.orderNumber || order._id.slice(-6);
-  const formattedOrderNumber = rawOrderNumber.startsWith('#') ? rawOrderNumber : `#${rawOrderNumber}`;
+  const formattedOrderNumber = formatOrderNumber(order);
   const statusLabel = formatStatus(status);
   const badgeStyle = statusBadgeColors(status);
   const [showBill, setShowBill] = useState(false);
@@ -1239,7 +1273,10 @@ function PartnerOrderCard({
       })()}
       <View style={styles.deliveryRow}>
         <Text style={[styles.orderDetail, styles.flex, { marginTop: 0 }]}>
-          Delivery: {address?.line1 ? `${address.line1}${address.line2 ? `, ${address.line2}` : ''}, ${address.city} ${address.postalCode}${address.digipin ? ` · DIGIPIN: ${formatDigipin(address.digipin)}` : ''}` : (address?.city ? `${address.city} ${address.postalCode || ''}`.trim() : 'Standard delivery')}
+          {(() => {
+            const custDigipin = resolveCustomerDigipin(order) || address?.digipin;
+            return `Delivery: ${address?.line1 ? `${address.line1}${address.line2 ? `, ${address.line2}` : ''}, ${address.city} ${address.postalCode}${custDigipin ? ` · DIGIPIN: ${formatDigipin(custDigipin)}` : ''}` : (address?.city ? `${address.city} ${address.postalCode || ''}`.trim() : 'Standard delivery')}`;
+          })()}
         </Text>
         {!isDelivered && !isCancelled && (
           <Pressable
@@ -1270,48 +1307,26 @@ function PartnerOrderCard({
         </Text>
       )}
       {showTracking && isRiderAssigned && !isDelivered && !isCancelled && (
-        <View style={styles.trackingBox}>
-          <View style={styles.trackingBoxHeader}>
-            <Text style={styles.trackingBoxTitle}>📍 Live Rider Tracking</Text>
-            <Pressable onPress={() => setShowTracking(false)}>
-              <Text style={styles.billBoxClose}>✕</Text>
-            </Pressable>
-          </View>
-          <Text style={styles.trackingText}>
-            Rider: {(order as any).riderName || (order as any).rider?.name || 'Assigned Delivery Partner'}
-          </Text>
-          {!!((order as any).riderPhone || (order as any).rider?.phone) && (
-            <Text style={styles.trackingText}>
-              Phone: {((order as any).riderPhone || (order as any).rider?.phone)}
-            </Text>
-          )}
-          <Text style={styles.trackingStatusText}>
-            Status: {order.isPickedUp || order.pickupStatus === 'picked_up'
-              ? '📦 Order picked up · On the way to customer'
-              : '🚴 Rider accepted · Heading to ' + (isShop ? 'shop' : 'restaurant') + ' for pickup'}
-          </Text>
-          {(() => {
-            const coords = (order as any).rider?.currentLocation || address?.coordinates || address?.location?.coordinates;
-            if (coords) {
-              const lat = Array.isArray(coords) ? coords[1] : coords.lat;
-              const lng = Array.isArray(coords) ? coords[0] : coords.lng;
-              if (typeof lat === 'number' && typeof lng === 'number') {
-                return (
-                  <Pressable
-                    onPress={() => {
-                      const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
-                      void Linking.openURL(url).catch(() => Alert.alert('Unable to open map'));
-                    }}
-                    style={styles.viewMapButton}
-                  >
-                    <Text style={styles.viewMapText}>🗺 View rider route on Google Maps</Text>
-                  </Pressable>
-                );
-              }
-            }
-            return null;
-          })()}
-        </View>
+        <LiveRouteTracker
+          orderId={order._id}
+          orderNumber={formattedOrderNumber}
+          endpoint={sessionToken && partnerRole ? `/api/${partnerRole}/orders/${order._id}/live-tracking` : undefined}
+          token={sessionToken}
+          isShop={isShop}
+          onClose={() => setShowTracking(false)}
+          fallbackRiderName={(order as any).riderName || (order as any).rider?.name}
+          fallbackRiderPhone={(order as any).riderPhone || (order as any).rider?.phone}
+          fallbackCustomerName={(order as any).customerName}
+          fallbackCustomerAddress={order.deliveryAddress}
+          fallbackCustomerDigipin={
+            resolveCustomerDigipin(order) ||
+            order.deliveryAddress?.digipin
+          }
+          fallbackStoreName={storeName || (isShop ? 'Shop' : 'Spice Garden')}
+          fallbackStoreDigipin={storeDigipin}
+          fallbackStoreAddress={storeAddress}
+          isPickedUp={isPickedUp}
+        />
       )}
 
       {isCancelled && !returnAccepted && canManage && (
@@ -1382,6 +1397,7 @@ function getStatCardBorder(tint: string): string {
     case '#fff0e5': return '#fed7aa';
     case '#eaf2ff': return '#bfdbfe';
     case '#f5f3ff': return '#ddd6fe';
+    case '#fee2e2': return '#fecaca';
     case '#dcfce7': return '#bbf7d0';
     case '#fef3c7': return '#fde68a';
     case '#eff7ee': return '#bbf7d0';
@@ -1449,7 +1465,24 @@ function ApprovalNotice({ kind }: { kind: string }) {
   );
 }
 
-type ReportPeriod = 'all' | 'today' | 'week' | 'month';
+function getWeekInfo(d: Date = new Date()) {
+  const date = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = (date.getDay() + 6) % 7; // 0 for Monday, 6 for Sunday
+  const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate() - day, 0, 0, 0, 0);
+  const sunday = new Date(date.getFullYear(), date.getMonth(), date.getDate() - day + 6, 23, 59, 59, 999);
+
+  // ISO 8601 week number (counting updates automatically)
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate() - day + 3);
+  const jan4 = new Date(target.getFullYear(), 0, 4);
+  const jan4Day = (jan4.getDay() + 6) % 7;
+  const firstMonday = new Date(target.getFullYear(), 0, 4 - jan4Day);
+  const diffDays = Math.round((target.getTime() - firstMonday.getTime()) / 86400000);
+  const weekNum = 1 + Math.floor(diffDays / 7);
+
+  return { weekNum, startMs: monday.getTime(), endMs: sunday.getTime() };
+}
+
+type ReportPeriod = 'all' | 'today' | 'week' | 'current_week' | 'prev_week' | 'month';
 
 function BusinessSalesReportModal({
   visible,
@@ -1475,7 +1508,25 @@ function BusinessSalesReportModal({
   const isShop = partnerRole === 'shop';
   const kind = isShop ? 'Shop' : 'Restaurant';
   const reportTitle = isShop ? 'Shop Business & Sales Report' : 'Restaurant Business & Sales Report';
-  const [period, setPeriod] = useState<ReportPeriod>('all');
+  const [period, setPeriod] = useState<ReportPeriod>('today');
+
+  useEffect(() => {
+    if (visible) {
+      setPeriod('today');
+    }
+  }, [visible]);
+
+  const currWeek = useMemo(() => getWeekInfo(new Date()), []);
+  const prevWeek = useMemo(() => getWeekInfo(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)), []);
+
+  const periodOptions: [ReportPeriod, string][] = useMemo(() => [
+    ['all', 'All Time'],
+    ['today', 'Today'],
+    ['week', 'Last 7 Days'],
+    ['current_week', `W-${currWeek.weekNum}`],
+    ['prev_week', `W-${prevWeek.weekNum}`],
+    ['month', 'This Month'],
+  ], [currWeek.weekNum, prevWeek.weekNum]);
 
   const periodOrders = useMemo(() => {
     if (period === 'all') return orders;
@@ -1488,10 +1539,12 @@ function BusinessSalesReportModal({
       const time = new Date(order.createdAt || 0).getTime();
       if (period === 'today') return time >= startOfDay;
       if (period === 'week') return time >= startOfWeek;
+      if (period === 'current_week') return time >= currWeek.startMs && time <= currWeek.endMs;
+      if (period === 'prev_week') return time >= prevWeek.startMs && time <= prevWeek.endMs;
       if (period === 'month') return time >= startOfMonth;
       return true;
     });
-  }, [orders, period]);
+  }, [orders, period, currWeek, prevWeek]);
 
   const stats = useMemo(() => {
     const totalOrders = periodOrders.length;
@@ -1607,15 +1660,13 @@ function BusinessSalesReportModal({
           </View>
 
           {/* Time Range Pills */}
-          <View style={styles.periodRow}>
-            {(
-              [
-                ['all', 'All Time'],
-                ['today', 'Today'],
-                ['week', 'Last 7 Days'],
-                ['month', 'This Month'],
-              ] as [ReportPeriod, string][]
-            ).map(([p, label]) => (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.periodRow}
+            style={styles.periodScrollWrapper}
+          >
+            {periodOptions.map(([p, label]) => (
               <Pressable
                 key={p}
                 onPress={() => setPeriod(p)}
@@ -1626,7 +1677,7 @@ function BusinessSalesReportModal({
                 </Text>
               </Pressable>
             ))}
-          </View>
+          </ScrollView>
 
           {/* Key Sales KPIs Grid */}
           <Text style={styles.sectionHeaderTitle}>Sales & Revenue</Text>
@@ -2206,13 +2257,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 4,
   },
-  periodRow: {
-    flexDirection: 'row',
-    gap: 6,
+  periodScrollWrapper: {
     marginBottom: 16,
   },
+  periodRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    paddingVertical: 2,
+  },
   periodChip: {
-    flex: 1,
+    paddingHorizontal: 13,
     paddingVertical: 8,
     borderRadius: 10,
     backgroundColor: '#ffffff',
@@ -2220,6 +2275,7 @@ const styles = StyleSheet.create({
     borderColor: '#e5e7eb',
     alignItems: 'center',
     justifyContent: 'center',
+    minWidth: 64,
   },
   periodChipActive: {
     backgroundColor: '#d83a32',

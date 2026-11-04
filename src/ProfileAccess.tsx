@@ -607,7 +607,7 @@ export function ProfileSettingsModal({
   const userPermissions = session?.user?.permissions || [];
 
   const roleDisplay = isAdmin
-    ? session?.user?.adminRoleTitle || (isSuperAdmin ? 'Super Admin' : isSubAdmin ? 'Sub-Admin' : 'Platform Admin')
+    ? (isSuperAdmin ? 'Super Admin' : (session?.user?.adminRoleTitle || (isSubAdmin ? 'Sub-Admin' : 'Platform Admin')))
     : session?.user?.role === 'customer'
     ? 'Customer'
     : (session?.user?.role ? session.user.role.charAt(0).toUpperCase() + session.user.role.slice(1) : 'Customer');
@@ -797,14 +797,18 @@ export function ProfileSettingsModal({
             <View style={styles.identity}>
               <Text style={styles.sheetTitle} numberOfLines={2}>
                 {isAdmin
-                  ? 'Admin Profile & Security'
+                  ? isSuperAdmin
+                    ? 'Platform Settings'
+                    : 'Admin Profile & Security'
                   : isRider
                     ? 'Rider Profile'
                     : `Account & Profile settings${isPartner ? '' : ` ${accountId}`}`}
               </Text>
               <Text style={styles.roleLabel}>
                 {isAdmin
-                  ? 'Manage administrative credentials, security keys & capabilities.'
+                  ? isSuperAdmin
+                    ? 'Manage platform governance, master credentials & system security.'
+                    : 'Manage administrative credentials, security keys & capabilities.'
                   : isRider
                     ? 'Manage your rider identity, vehicle and credentials.'
                     : 'Manage your personal details and account credentials.'}
@@ -817,37 +821,35 @@ export function ProfileSettingsModal({
           {Boolean(error) && <Text style={styles.error}>{error}</Text>}
 
           <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-            {/* Admin Privilege & Capabilities Card */}
-            {isAdmin && (
+            {/* Sub-Admin & Platform Admin: Full Privilege & Capabilities Card */}
+            {isAdmin && !isSuperAdmin && (
               <View style={styles.adminPrivilegeCard}>
                 <View style={styles.adminPrivilegeHeader}>
                   <View style={styles.adminAvatarBox}>
-                    <Text style={styles.adminAvatarEmoji}>{isSuperAdmin ? '👑' : isSubAdmin ? '🛡️' : '⚡'}</Text>
+                    <Text style={styles.adminAvatarEmoji}>{isSubAdmin ? '🛡️' : '⚡'}</Text>
                   </View>
                   <View style={styles.adminPrivilegeInfo}>
                     <View style={styles.adminBadgeRow}>
                       <View style={[
                         styles.adminRoleBadge,
-                        isSuperAdmin ? styles.superAdminBadge : isSubAdmin ? styles.subAdminBadge : styles.platformAdminBadge
+                        isSubAdmin ? styles.subAdminBadge : styles.platformAdminBadge
                       ]}>
                         <Text style={[
                           styles.adminRoleBadgeText,
-                          isSuperAdmin ? styles.superAdminBadgeText : isSubAdmin ? styles.subAdminBadgeText : styles.platformAdminBadgeText
+                          isSubAdmin ? styles.subAdminBadgeText : styles.platformAdminBadgeText
                         ]}>
-                          {isSuperAdmin ? 'SUPER ADMIN' : isSubAdmin ? 'SUB-ADMIN' : 'PLATFORM ADMIN'}
+                          {isSubAdmin ? 'SUB-ADMIN' : 'PLATFORM ADMIN'}
                         </Text>
                       </View>
                       <Text style={styles.adminIdTag}>{accountId}</Text>
                     </View>
                     <Text style={styles.adminTitleText}>
-                      {session?.user?.adminRoleTitle || (isSuperAdmin ? 'Executive Platform Administrator' : isSubAdmin ? 'Operations Sub-Admin' : 'Platform Administrator')}
+                      {session?.user?.adminRoleTitle || (isSubAdmin ? 'Operations Sub-Admin' : 'Platform Administrator')}
                     </Text>
                     <Text style={styles.adminLevelText}>
-                      {isSuperAdmin
-                        ? 'Full Unrestricted System Access · All 12 Workspaces'
-                        : isSubAdmin
-                          ? 'Role-Scoped Operations Access'
-                          : 'Administrative Management Access'}
+                      {isSubAdmin
+                        ? 'Role-Scoped Operations Access'
+                        : 'Administrative Management Access'}
                     </Text>
                   </View>
                 </View>
@@ -856,11 +858,7 @@ export function ProfileSettingsModal({
 
                 <Text style={styles.adminPermTitle}>AUTHORIZED CAPABILITIES & ROLES</Text>
                 <View style={styles.adminPermChipsWrap}>
-                  {isSuperAdmin ? (
-                    <View style={styles.adminPermSuperChip}>
-                      <Text style={styles.adminPermSuperChipText}>✓ All 12 Workspaces & Root Controls Authorized</Text>
-                    </View>
-                  ) : userPermissions.length > 0 ? (
+                  {userPermissions.length > 0 ? (
                     userPermissions.map((perm) => (
                       <View key={perm} style={styles.adminPermChip}>
                         <Text style={styles.adminPermChipText}>✓ {formatPermissionLabel(perm)}</Text>
@@ -880,7 +878,7 @@ export function ProfileSettingsModal({
                       OPERATING LOCATION &amp; CONTROL PANEL
                     </Text>
                     <Text style={{ fontSize: 10, color: '#b91c1c', fontWeight: '700' }}>
-                      {isSuperAdmin ? 'Super Admin' : isSubAdmin ? 'Sub-Admin' : 'Admin'}
+                      {isSubAdmin ? 'Sub-Admin' : 'Admin'}
                     </Text>
                   </View>
                   <Text style={{ fontSize: 12, color: '#6b7280', lineHeight: 17, marginBottom: 10 }}>
@@ -1459,27 +1457,43 @@ export default function ProfileAccess({
               <Pressable
                 onPress={() => chooseItem({
                   key: 'profile-settings',
-                  label: isAdmin ? 'Admin Profile & Security' : isRider ? 'Rider Profile' : 'Profile Settings',
-                  icon: isAdmin ? '🛡️' : '⚙',
-                  description: isAdmin
-                    ? 'Admin credentials, capabilities & security keys'
-                    : isRider
-                      ? 'Rider profile, vehicle & account security'
-                      : 'Account, DOB, photo & password security'
-                })}
-                style={styles.menuItem}
-              >
-                <Text style={styles.menuItemIcon}>{isAdmin ? '🛡️' : '⚙'}</Text>
-                <View style={styles.menuItemBody}>
-                  <Text style={styles.menuItemLabel}>
-                    {isAdmin ? 'Admin Profile & Security' : isRider ? 'Rider Profile' : 'Profile Settings'}
-                  </Text>
-                  <Text style={styles.menuItemDescription}>
-                    {isAdmin
+                  label: isSuperAdmin
+                    ? 'Platform Settings'
+                    : isAdmin
+                      ? 'Admin Profile & Security'
+                      : isRider
+                        ? 'Rider Profile'
+                        : 'Profile Settings',
+                  icon: isSuperAdmin ? '⚙️' : isAdmin ? '🛡️' : '⚙',
+                  description: isSuperAdmin
+                    ? 'Superadmin credentials, platform governance & security'
+                    : isAdmin
                       ? 'Admin credentials, capabilities & security keys'
                       : isRider
                         ? 'Rider profile, vehicle & account security'
-                        : 'Account & Profile settings, photo & security'}
+                        : 'Account, DOB, photo & password security'
+                })}
+                style={styles.menuItem}
+              >
+                <Text style={styles.menuItemIcon}>{isSuperAdmin ? '⚙️' : isAdmin ? '🛡️' : '⚙'}</Text>
+                <View style={styles.menuItemBody}>
+                  <Text style={styles.menuItemLabel}>
+                    {isSuperAdmin
+                      ? 'Platform Settings'
+                      : isAdmin
+                        ? 'Admin Profile & Security'
+                        : isRider
+                          ? 'Rider Profile'
+                          : 'Profile Settings'}
+                  </Text>
+                  <Text style={styles.menuItemDescription}>
+                    {isSuperAdmin
+                      ? 'Superadmin credentials, platform governance & security'
+                      : isAdmin
+                        ? 'Admin credentials, capabilities & security keys'
+                        : isRider
+                          ? 'Rider profile, vehicle & account security'
+                          : 'Account & Profile settings, photo & security'}
                   </Text>
                 </View>
                 <Text style={styles.chevron}>›</Text>

@@ -83,6 +83,8 @@ export async function createRazorpayOrder({
   const rcpt = receipt || `rcpt_${Date.now()}`;
 
   try {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), 1200) : null;
     const authHeader = `Basic ${safeBase64(`${RAZORPAY_CONFIG.keyId}:${RAZORPAY_CONFIG.keySecret}`)}`;
     const response = await fetch('https://api.razorpay.com/v1/orders', {
       method: 'POST',
@@ -96,7 +98,10 @@ export async function createRazorpayOrder({
         receipt: rcpt,
         notes: notes || { platform: 'Tomato Android App' },
       }),
+      signal: controller?.signal,
     });
+
+    if (timeoutId) clearTimeout(timeoutId);
 
     if (response.ok) {
       const data = (await response.json()) as RazorpayOrder;

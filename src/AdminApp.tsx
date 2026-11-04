@@ -78,41 +78,13 @@ type StaffRole = {
   isSystem?: boolean;
 };
 
-export type ServiceArea = {
-  id: string;
-  name: string;
-  pincodes: string[];
-  assignedAdminId?: string;
-  assignedAdminName?: string;
-  assignedAdminRole?: string;
-  city?: string;
-  createdBy?: string;
-  createdAt: string;
-  updatedAt?: string;
-};
+import {
+  type ServiceArea,
+  loadStoredServiceAreas,
+  persistServiceAreas,
+} from './serviceArea';
 
-const SERVICE_AREAS_STORAGE_KEY = 'tomato.service_areas.v1';
-
-async function loadStoredServiceAreas(): Promise<ServiceArea[]> {
-  try {
-    const raw = await SecureStore.getItemAsync(SERVICE_AREAS_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch (err) {
-    console.warn('Failed to load stored service areas:', err);
-  }
-  return [];
-}
-
-async function persistServiceAreas(areas: ServiceArea[]): Promise<void> {
-  try {
-    await SecureStore.setItemAsync(SERVICE_AREAS_STORAGE_KEY, JSON.stringify(areas));
-  } catch (err) {
-    console.warn('Failed to persist service areas:', err);
-  }
-}
+export type { ServiceArea };
 
 const permissions = [
   ['dashboard_view', 'Dashboard'],
@@ -443,7 +415,7 @@ export default function AdminApp({
   }, [role, isSuperAdmin, isPlatformAdmin, session.user.baseRole, userPermissions.join(',')]);
 
   const [tab, setTab] = useState<AdminTab>(tabs[0] || 'dashboard');
-  const [gridExpanded, setGridExpanded] = useState(true);
+  const [gridExpanded, setGridExpanded] = useState(false);
   const [overviewGridFit, setOverviewGridFit] = useState(false);
   const currWeek = useMemo(() => getWeekInfo(new Date()), []);
   const prevWeek = useMemo(() => getWeekInfo(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)), []);
@@ -1640,7 +1612,11 @@ export default function AdminApp({
                     </View>
 
                     {/* Quick Period Selector */}
-                    <View style={styles.reportPeriodRow}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.reportPeriodRow}
+                    >
                       {([
                         ['all', 'All Time'],
                         ['today', 'Today'],
@@ -1662,7 +1638,7 @@ export default function AdminApp({
                           </Pressable>
                         );
                       })}
-                    </View>
+                    </ScrollView>
 
                     {/* Executive Metrics Grid */}
                     <View style={styles.reportMetricsGrid}>
@@ -2964,7 +2940,11 @@ function SuperAdminReportModal({
 
         <ScrollView contentContainerStyle={styles.reportModalBody} showsVerticalScrollIndicator={false}>
           {/* Period selector */}
-          <View style={styles.reportPeriodRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.reportPeriodRow}
+          >
             {([
               ['all', 'All Time'],
               ['today', 'Today'],
@@ -2986,7 +2966,7 @@ function SuperAdminReportModal({
                 </Pressable>
               );
             })}
-          </View>
+          </ScrollView>
 
           {/* Period Badge / Meta Banner */}
           <View style={styles.reportMetaBanner}>
@@ -3811,9 +3791,10 @@ const styles = StyleSheet.create({
   },
   reportPeriodRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 6,
     marginBottom: 12,
-    flexWrap: 'wrap',
+    paddingVertical: 2,
   },
   reportPeriodChip: {
     paddingHorizontal: 10,

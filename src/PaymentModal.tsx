@@ -170,7 +170,7 @@ export default function PaymentModal({
 
   const executeRazorpayPayment = async () => {
     setStep('processing');
-    setProcessingStatus(`Initiating Razorpay payment (${RAZORPAY_CONFIG.keyId})…`);
+    setProcessingStatus('Authorizing payment with Razorpay…');
 
     let rzpOrder: RazorpayOrder | null = null;
     try {
@@ -182,20 +182,13 @@ export default function PaymentModal({
         },
       });
     } catch {
-      // fallback
+      // fallback handled gracefully
     }
 
     const orderId = rzpOrder?.id || `order_${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
     setRazorpayOrderId(orderId);
 
-    setTimeout(() => {
-      setProcessingStatus('Verifying payment signature with Razorpay…');
-    }, 700);
-
-    setTimeout(() => {
-      setProcessingStatus('Authorizing payment with issuing bank…');
-    }, 1300);
-
+    // Fast, responsive completion within ~250ms
     setTimeout(async () => {
       const result = generateRazorpayPaymentResult({
         orderId,
@@ -225,7 +218,7 @@ export default function PaymentModal({
         setErrorMessage(err instanceof Error ? err.message : 'Order creation failed.');
         setStep('select');
       }
-    }, 2000);
+    }, 250);
   };
 
   const executeCodPayment = async () => {
@@ -246,7 +239,7 @@ export default function PaymentModal({
         setErrorMessage(err instanceof Error ? err.message : 'Order creation failed.');
         setStep('select');
       }
-    }, 800);
+    }, 100);
   };
 
   const handleVerifyOtp = () => {

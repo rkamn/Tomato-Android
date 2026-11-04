@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Modal,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,6 +19,7 @@ export type NewDeliveryOfferModalProps = {
   rider: User;
   operatingPincode?: string;
   onAccept: (order: Order) => void | Promise<void>;
+  onReject?: (order: Order) => void | Promise<void>;
   onViewOffer: () => void;
   onClose: () => void;
   isLoading?: boolean;
@@ -24,7 +27,7 @@ export type NewDeliveryOfferModalProps = {
 
 function extractPincode(text?: string): string | undefined {
   if (!text) return undefined;
-  const match = text.match(/\b([1-9][0-9]{5})\b/);
+  const match = text.match(/\b([1-9][0-9]{4,5})\b/);
   return match ? match[1] : undefined;
 }
 
@@ -104,12 +107,207 @@ export function isOrderInServiceablePincode(
   return riderPins.some((pin) => pin === pickupPin || pin === deliveryPin || allPins.includes(pin));
 }
 
+type DeliveryOfferSliderProps = {
+  onAccept: () => void;
+  onReject: () => void;
+  isLoading?: boolean;
+};
+
+function DeliveryOfferSlider({ onAccept, onReject, isLoading }: DeliveryOfferSliderProps) {
+  const [trackWidth, setTrackWidth] = useState(330);
+  const [slideState, setSlideState] = useState<'left' | 'center' | 'right'>('center');
+  const panX = useRef(new Animated.Value(0)).current;
+
+  const KNOB_WIDTH = 54;
+  const PADDING = 4;
+  const maxRight = Math.max(40, (trackWidth - KNOB_WIDTH) / 2 - PADDING);
+  const maxLeft = -maxRight;
+  const threshold = maxRight * 0.62;
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => !isLoading,
+        onMoveShouldSetPanResponder: (_, gesture) => !isLoading && Math.abs(gesture.dx) > 3,
+        onPanResponderMove: (_, gesture) => {
+          if (isLoading) return;
+          const clamped = Math.max(maxLeft, Math.min(maxRight, gesture.dx));
+          panX.setValue(clamped);
+          if (clamped >= threshold) {
+            setSlideState('right');
+          } else if (clamped <= -threshold) {
+            setSlideState('left');
+          } else {
+            setSlideState('center');
+          }
+        },
+        onPanResponderRelease: (_, gesture) => {
+          if (isLoading) return;
+          if (gesture.dx >= threshold) {
+            // Slide right to accept with green color
+            Animated.timing(panX, {
+              toValue: maxRight,
+              duration: 120,
+              useNativeDriver: false,
+            }).start(() => {
+              onAccept();
+            });
+          } else if (gesture.dx <= -threshold) {
+            // Slide left to reject with red color
+            Animated.timing(panX, {
+              toValue: maxLeft,
+              duration: 120,
+              useNativeDriver: false,
+            }).start(() => {
+              onReject();
+            });
+          } else {
+            // Spring back to center
+            setSlideState('center');
+            Animated.spring(panX, {
+              toValue: 0,
+              friction: 6,
+              tension: 50,
+              useNativeDriver: false,
+            }).start();
+          }
+        },
+        onPanResponderTerminate: () => {
+          setSlideState('center');
+          Animated.spring(panX, {
+            toValue: 0,
+            friction: 6,
+            tension: 50,
+            useNativeDriver: false,
+          }).start();
+        },
+      }),
+    [maxLeft, maxRight, threshold, isLoading, onAccept, onReject],
+  );
+
+  // Dynamic Background and Border Colors based on panX
+  const trackBg = panX.interpolate({
+    inputRange: [maxLeft, -20, 0, 20, maxRight],
+    outputRange: [
+      '#fee2e2', // Red tint on left
+      '#fef2f2',
+      '#f8fafc', // Neutral center
+      '#f0fdf4',
+      '#dcfce7', // Green tint on right
+    ],
+    extrapolate: 'clamp',
+  });
+
+  const trackBorder = panX.interpolate({
+    inputRange: [maxLeft, -20, 0, 20, maxRight],
+    outputRange: [
+      '#ef4444',
+      '#fca5a5',
+      '#e2e8f0',
+      '#86efac',
+      '#22c55e',
+    ],
+    extrapolate: 'clamp',
+  });
+
+  const knobBg = panX.interpolate({
+    inputRange: [maxLeft, -threshold, 0, threshold, maxRight],
+    outputRange: [
+      '#dc2626', // Solid red on left
+      '#ef4444',
+      '#ffffff', // White knob in center
+      '#16a34a',
+      '#15803d', // Solid green on right
+    ],
+    extrapolate: 'clamp',
+  });
+
+  const knobBorderColor = panX.interpolate({
+    inputRange: [maxLeft, -threshold, 0, threshold, maxRight],
+    outputRange: [
+      '#991b1b',
+      '#b91c1c',
+      '#cbd5e1',
+      '#15803d',
+      '#166534',
+    ],
+    extrapolate: 'clamp',
+  });
+
+  return (
+    <View
+      onLayout={(e) => {
+        const w = e.nativeEvent.layout.width;
+        if (w > 100) setTrackWidth(w);
+      }}
+      style={styles.sliderOuter}
+    >
+      <Animated.View style={[styles.sliderTrack, { backgroundColor: trackBg, borderColor: trackBorder }]}>
+        {/* Left Indicator: Slide left to reject with red color */}
+        <View style={styles.sliderLabelLeft} pointerEvents="none">
+          <Text style={[styles.sliderTextReject, slideState === 'left' && styles.sliderTextActiveRed]}>
+            {slideState === 'left' ? '✕ Release' : '◀ Reject'}
+          </Text>
+        </View>
+
+        {/* Right Indicator: Slide right to accept with green color */}
+        <View style={styles.sliderLabelRight} pointerEvents="none">
+          <Text style={[styles.sliderTextAccept, slideState === 'right' && styles.sliderTextActiveGreen]}>
+            {slideState === 'right' ? 'Release ✓' : 'Accept ▶'}
+          </Text>
+        </View>
+
+        {/* Center Instructions when resting */}
+        {slideState === 'center' && (
+          <View style={styles.sliderCenterGuide} pointerEvents="none">
+            <Text style={styles.sliderCenterText}>⟵ Slide to Reject | Slide to Accept ⟶</Text>
+          </View>
+        )}
+
+        {/* Draggable Knob */}
+        <Animated.View
+          {...panResponder.panHandlers}
+          style={[
+            styles.sliderKnob,
+            {
+              transform: [{ translateX: panX }],
+              backgroundColor: knobBg,
+              borderColor: knobBorderColor,
+            },
+          ]}
+        >
+          {isLoading ? (
+            <ActivityIndicator size="small" color={slideState === 'center' ? '#0284c7' : '#ffffff'} />
+          ) : (
+            <View style={styles.knobContent}>
+              {slideState === 'right' ? (
+                <Text style={styles.knobIconWhite}>✓</Text>
+              ) : slideState === 'left' ? (
+                <Text style={styles.knobIconWhite}>✕</Text>
+              ) : (
+                <Text style={styles.knobIconCenter}>⟷</Text>
+              )}
+            </View>
+          )}
+        </Animated.View>
+      </Animated.View>
+
+      {/* Guide Legend */}
+      <View style={styles.sliderLegendRow}>
+        <Text style={styles.sliderLegendReject}>🔴 Slide Left to Reject</Text>
+        <Text style={styles.sliderLegendAccept}>🟢 Slide Right to Accept</Text>
+      </View>
+    </View>
+  );
+}
+
 export default function NewDeliveryOfferModal({
   visible,
   order,
   rider,
   operatingPincode,
   onAccept,
+  onReject,
   onViewOffer,
   onClose,
   isLoading = false,
@@ -258,40 +456,28 @@ export default function NewDeliveryOfferModal({
             </View>
           </ScrollView>
 
-          {/* Action Buttons */}
+          {/* Action Slider */}
           <View style={styles.actions}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Accept delivery order"
-              disabled={isLoading}
-              onPress={() => void onAccept(order)}
-              style={[styles.btn, styles.acceptBtn, isLoading && styles.btnDisabled]}
-            >
-              {isLoading ? (
-                <ActivityIndicator size="small" color="#ffffff" />
-              ) : (
-                <Text style={styles.acceptBtnText}>✓ Accept Delivery</Text>
-              )}
-            </Pressable>
+            <DeliveryOfferSlider
+              onAccept={() => void onAccept(order)}
+              onReject={() => {
+                if (onReject) {
+                  void onReject(order);
+                } else {
+                  onClose();
+                }
+              }}
+              isLoading={isLoading}
+            />
 
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="View in available pickups"
               disabled={isLoading}
               onPress={onViewOffer}
-              style={[styles.btn, styles.viewBtn]}
+              style={styles.viewBtn}
             >
               <Text style={styles.viewBtnText}>📋 View Available Pickups</Text>
-            </Pressable>
-
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Dismiss offer for now"
-              disabled={isLoading}
-              onPress={onClose}
-              style={styles.dismissBtn}
-            >
-              <Text style={styles.dismissBtnText}>Dismiss for now</Text>
             </Pressable>
           </View>
         </Pressable>
@@ -576,6 +762,104 @@ const styles = StyleSheet.create({
   actions: {
     gap: 8,
     marginTop: 4,
+  },
+  sliderOuter: {
+    width: '100%',
+    marginVertical: 4,
+  },
+  sliderTrack: {
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  sliderLabelLeft: {
+    position: 'absolute',
+    left: 14,
+    zIndex: 1,
+  },
+  sliderTextReject: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#ef4444',
+    letterSpacing: 0.5,
+  },
+  sliderTextActiveRed: {
+    color: '#b91c1c',
+    fontSize: 13,
+  },
+  sliderLabelRight: {
+    position: 'absolute',
+    right: 14,
+    zIndex: 1,
+  },
+  sliderTextAccept: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#16a34a',
+    letterSpacing: 0.5,
+  },
+  sliderTextActiveGreen: {
+    color: '#15803d',
+    fontSize: 13,
+  },
+  sliderCenterGuide: {
+    position: 'absolute',
+    zIndex: 1,
+    opacity: 0.5,
+  },
+  sliderCenterText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+    letterSpacing: 0.2,
+  },
+  sliderKnob: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.22,
+    shadowRadius: 5,
+    elevation: 6,
+  },
+  knobContent: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  knobIconCenter: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#334155',
+  },
+  knobIconWhite: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#ffffff',
+  },
+  sliderLegendRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    marginTop: 6,
+  },
+  sliderLegendReject: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#dc2626',
+  },
+  sliderLegendAccept: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#15803d',
   },
   btn: {
     paddingVertical: 12,

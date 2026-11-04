@@ -60,6 +60,7 @@ class ErrorBoundary extends React.Component<
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [restoring, setRestoring] = useState(true);
+  const [showAuthScreen, setShowAuthScreen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -141,12 +142,14 @@ export default function App() {
     };
     const nextSession = { token, user: normalizedUser };
     await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(nextSession)).catch(() => null);
+    setShowAuthScreen(false);
     setSession(nextSession);
   }
 
   async function signOut() {
     await SecureStore.deleteItemAsync(SESSION_KEY).catch(() => null);
     setSession(null);
+    setShowAuthScreen(false);
   }
 
   async function updateSessionUser(user: User) {
@@ -178,7 +181,12 @@ export default function App() {
           isAdminUser(session.user || {}) ? (
             <AdminApp session={session} onSignOut={signOut} onSessionUserUpdate={updateSessionUser} />
           ) : session.user.role === 'customer' ? (
-            <CustomerApp session={session} onSignOut={signOut} onSessionUserUpdate={updateSessionUser} />
+            <CustomerApp
+              session={session}
+              onSignOut={signOut}
+              onSessionUserUpdate={updateSessionUser}
+              onRequestSignIn={() => setShowAuthScreen(true)}
+            />
           ) : session.user.role === 'deliveryPartner' ? (
             <RiderApp session={session} onSignOut={signOut} onSessionUserUpdate={updateSessionUser} />
           ) : session.user.role === 'restaurant' || session.user.role === 'shop' ? (
@@ -189,10 +197,17 @@ export default function App() {
               onSessionUserUpdate={updateSessionUser}
             />
           ) : (
-            <AuthScreen onAuthenticated={signIn} />
+            <AuthScreen onAuthenticated={signIn} onCancel={() => setShowAuthScreen(false)} />
           )
+        ) : showAuthScreen ? (
+          <AuthScreen onAuthenticated={signIn} onCancel={() => setShowAuthScreen(false)} />
         ) : (
-          <AuthScreen onAuthenticated={signIn} />
+          <CustomerApp
+            session={null}
+            onSignOut={async () => setShowAuthScreen(true)}
+            onSessionUserUpdate={updateSessionUser}
+            onRequestSignIn={() => setShowAuthScreen(true)}
+          />
         )}
       </View>
     </ErrorBoundary>

@@ -20,14 +20,16 @@ type AuthResponse = { token: string; user: User };
 
 type Props = {
   onAuthenticated: (token: string, user: User) => Promise<void>;
+  onCancel?: () => void;
 };
 
-export default function AuthScreen({ onAuthenticated }: Props) {
+export default function AuthScreen({ onAuthenticated, onCancel }: Props) {
   const [registering, setRegistering] = useState(false);
   const [role, setRole] = useState<AccountRole>('customer');
   const [name, setName] = useState('');
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [pickupAddress, setPickupAddress] = useState('');
   const [pincode, setPincode] = useState('');
   const [digipin, setDigipin] = useState('');
@@ -195,6 +197,16 @@ export default function AuthScreen({ onAuthenticated }: Props) {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        {Boolean(onCancel) && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close sign in and browse as guest"
+            onPress={onCancel}
+            style={styles.cancelGuestBtn}
+          >
+            <Text style={styles.cancelGuestBtnText}>✕ Continue as guest</Text>
+          </Pressable>
+        )}
         <View style={styles.brandMark}>
           <Text style={styles.brandEmoji}>🍅</Text>
         </View>
@@ -317,19 +329,33 @@ export default function AuthScreen({ onAuthenticated }: Props) {
             style={styles.input}
             value={identifier}
           />
-          <TextInput
-            accessibilityLabel="Password"
-            autoCapitalize="none"
-            autoComplete={registering ? 'new-password' : 'current-password'}
-            onChangeText={setPassword}
-            onFocus={() => slideUpForInput(registering ? 270 : 170)}
-            onSubmitEditing={submit}
-            placeholder="Password"
-            placeholderTextColor="#998f88"
-            secureTextEntry
-            style={styles.input}
-            value={password}
-          />
+          <View style={styles.passwordContainer}>
+            <TextInput
+              accessibilityLabel="Password"
+              autoCapitalize="none"
+              autoComplete={registering ? 'new-password' : 'current-password'}
+              onChangeText={setPassword}
+              onFocus={() => slideUpForInput(registering ? 270 : 170)}
+              onSubmitEditing={submit}
+              placeholder="Password"
+              placeholderTextColor="#998f88"
+              secureTextEntry={!showPassword}
+              style={styles.passwordInput}
+              value={password}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={showPassword ? 'Hide password' : 'View password'}
+              hitSlop={8}
+              onPress={() => setShowPassword((prev) => !prev)}
+              style={styles.eyeButton}
+            >
+              <View style={styles.eyeIconWrapper}>
+                <Text style={[styles.eyeIcon, showPassword && styles.eyeIconActive]}>👁️</Text>
+                {!showPassword && <View style={styles.eyeSlash} />}
+              </View>
+            </Pressable>
+          </View>
 
           {!!error && <Text style={styles.error}>{error}</Text>}
           <Pressable
@@ -382,6 +408,21 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     paddingTop: 20,
     paddingBottom: 280,
+  },
+  cancelGuestBtn: {
+    alignSelf: 'flex-end',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#f5efe8',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5dbd1',
+    marginBottom: 8,
+  },
+  cancelGuestBtnText: {
+    color: '#65574c',
+    fontSize: 12,
+    fontWeight: '700',
   },
   brandMark: {
     alignSelf: 'center',
@@ -439,6 +480,52 @@ const styles = StyleSheet.create({
     color: '#28221e',
     fontSize: 15,
     marginBottom: 12,
+  },
+  passwordContainer: {
+    height: 52,
+    backgroundColor: '#fffaf7',
+    borderColor: '#ece3dc',
+    borderWidth: 1,
+    borderRadius: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingRight: 6,
+  },
+  passwordInput: {
+    flex: 1,
+    height: 52,
+    paddingHorizontal: 15,
+    color: '#28221e',
+    fontSize: 15,
+  },
+  eyeButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  eyeIconWrapper: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  eyeIcon: {
+    fontSize: 18,
+    opacity: 0.55,
+  },
+  eyeIconActive: {
+    opacity: 1,
+  },
+  eyeSlash: {
+    position: 'absolute',
+    width: 19,
+    height: 2,
+    backgroundColor: '#786d65',
+    transform: [{ rotate: '-45deg' }],
+    borderRadius: 1,
   },
   error: {
     color: '#b42318',

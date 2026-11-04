@@ -37,7 +37,17 @@ import PaymentModal from './PaymentModal';
 import type { PaymentSuccessDetails } from './PaymentModal';
 import ProfileAccess from './ProfileAccess';
 import type { ProfileMenuItem } from './ProfileAccess';
-import { formatOrderNumber, formatOrderStatus, getCustomerId, getItemVariants, getOrderStatusBadgeColors, isOrderReturnAccepted, isOrderTrackingActive } from './types';
+import {
+  formatOrderNumber,
+  formatOrderStatus,
+  getCustomerId,
+  getItemVariants,
+  getOrderStatusBadgeColors,
+  isOrderReturnAccepted,
+  isOrderTrackingActive,
+  type Bill,
+  type OrderTracking,
+} from './types';
 import type {
   Address,
   CustomerNotification,
@@ -48,9 +58,65 @@ import type {
   Store,
   User,
 } from './types';
+import {
+  type ServiceArea,
+  type ServiceAreaCheckResult,
+  loadStoredServiceAreas,
+  persistServiceAreas,
+  getStorePincode,
+  getAddressPincode,
+  checkServiceAreaMatch,
+  isStoreServiceableForCustomer,
+  getStoreCoordinates,
+  calculateDistanceKm,
+  extractPincode,
+  getAllServiceablePincodes,
+  isPincodeInServiceAreas,
+} from './serviceArea';
+import {
+  type BrowseMode,
+  storeId,
+  isStoreOpen,
+  normalizeIdString,
+  getStoreIds,
+  getItemStoreIds,
+  getItemStoreName,
+  itemBelongsToStore,
+  findStoreForItem,
+  formatRupees,
+  addressSummary,
+  getErrorMessage,
+  VegBadge,
+  NonVegBadge,
+  isItemVeg,
+  getStoreDietary,
+  getCategoryIcon,
+  itemMatchesCategory,
+  storeMatchesCategory,
+} from './customerHelpers';
+import { CustomerNotificationsModal } from './CustomerNotificationsModal';
+import {
+  EmptyState,
+  PrimaryButton,
+  QuantityControl,
+  BillRow,
+  DashboardTile,
+  ModeButton,
+} from './CustomerComponents';
+import { OrderCard } from './OrderCard';
+
+const DEFAULT_RESTAURANT_ITEM_IMAGE = require('../assets/tomato.png');
+const DEFAULT_LAMBDA_LOGO = require('../assets/lambda.jpg');
+
+export function getDefaultItemImage(isShop?: boolean) {
+  return isShop ? DEFAULT_LAMBDA_LOGO : DEFAULT_RESTAURANT_ITEM_IMAGE;
+}
+
+export function getDefaultStoreLogo(_isShop?: boolean) {
+  return DEFAULT_LAMBDA_LOGO;
+}
 
 type Tab = 'browse' | 'cart' | 'orders' | 'addresses' | 'account';
-type BrowseMode = 'restaurant' | 'shop';
 type CartLine = MenuItem & { quantity: number; availableQuantity?: number };
 type Coupon = {
   code: string;
@@ -118,53 +184,6 @@ const POPULAR_BANKS = [
   'Punjab National Bank',
 ];
 
-type OrderTracking = {
-  orderId?: string;
-  orderNumber?: string;
-  riderUserId?: string;
-  status?: string;
-  trackingClosed?: boolean;
-  estimatedMinutes?: number;
-  expectedDeliveryTimingMinutes?: number;
-  telemetry?: {
-    etaMinutes?: number;
-    lastPingSecondsAgo?: number | null;
-    isLiveOnline?: boolean;
-    riderLocation?: { lat?: number; lng?: number };
-    currentLocation?: { lat?: number; lng?: number };
-  };
-  isPickedUp?: boolean;
-  pickupStatus?: string;
-  rider?: {
-    name?: string;
-    phone?: string;
-    lastLocationUpdated?: string;
-    isOnline?: boolean;
-    currentLocation?: { lat?: number; lng?: number };
-    location?: { coordinates?: number[] };
-  };
-  returnStatus?: string;
-  returnAccepted?: boolean;
-  returnAcceptedBy?: string;
-};
-type Bill = {
-  invoiceNumber?: string;
-  orderNumber?: string;
-  date?: string;
-  items?: { name?: string; quantity?: number; price?: number; totalPrice?: number }[];
-  subtotal?: number;
-  cgst?: number;
-  sgst?: number;
-  tax?: number;
-  deliveryFee?: number;
-  grossAmount?: number;
-  discountAmount?: number;
-  couponCodes?: string[];
-  totalAmount?: number;
-  paymentMethod?: string;
-  paymentStatus?: string;
-  orderStatus?: string;
-};
 type ReviewTarget = {
   orderId: string;
   itemId: string;
@@ -174,9 +193,10 @@ type ReviewTarget = {
 };
 
 type Props = {
-  session: Session;
+  session: Session | null;
   onSignOut: () => Promise<void>;
-  onSessionUserUpdate: (user: User) => Promise<void>;
+  onSessionUserUpdate?: (user: User) => Promise<void>;
+  onRequestSignIn?: () => void;
 };
 
 const tabs: { id: Tab; label: string; icon: string }[] = [
@@ -186,347 +206,6 @@ const tabs: { id: Tab; label: string; icon: string }[] = [
   { id: 'addresses', label: 'Address', icon: '📍' },
   { id: 'account', label: 'Account', icon: '☺' },
 ];
-
-function storeId(store: Store): string {
-  return store._id || store.id || '';
-}
-
-function isStoreOpen(store?: Store | null): boolean {
-  if (!store) return false;
-  if (store.isApproved === false) return false;
-  if (store.isOpen === false || store.isOnline === false) return false;
-  const anyStore = store as Record<string, unknown>;
-  if (anyStore.open === false || anyStore.online === false) return false;
-  if (typeof anyStore.status === 'string') {
-    const s = anyStore.status.toLowerCase().trim();
-    if (s === 'closed' || s === 'offline' || s === 'inactive' || s === 'blocked') {
-      return false;
-    }
-  }
-  return true;
-}
-
-function normalizeIdString(val: unknown): string {
-  if (!val) return '';
-  if (typeof val === 'string') return val.trim().toLowerCase();
-  if (typeof val === 'number') return String(val);
-  if (typeof val === 'object' && val !== null) {
-    const anyObj = val as Record<string, unknown>;
-    if (typeof anyObj.toString === 'function' && anyObj.toString !== Object.prototype.toString) {
-      const str = anyObj.toString();
-      if (str && typeof str === 'string' && str !== '[object Object]') {
-        return str.trim().toLowerCase();
-      }
-    }
-    if (anyObj._id && typeof anyObj._id === 'string') return anyObj._id.trim().toLowerCase();
-    if (anyObj.id && typeof anyObj.id === 'string') return anyObj.id.trim().toLowerCase();
-    if (anyObj.$oid && typeof anyObj.$oid === 'string') return anyObj.$oid.trim().toLowerCase();
-  }
-  return '';
-}
-
-function getStoreIds(store?: Store | null): string[] {
-  if (!store) return [];
-  const ids: string[] = [];
-  const push = (val: unknown) => {
-    const id = normalizeIdString(val);
-    if (id && !ids.includes(id)) ids.push(id);
-  };
-  push(store._id);
-  push(store.id);
-  const anyStore = store as unknown as Record<string, unknown>;
-  push(anyStore.restaurantId);
-  push(anyStore.restaurant_id);
-  push(anyStore.userId);
-  push(anyStore.user_id);
-  push(anyStore.user);
-  push(anyStore.shopId);
-  push(anyStore.shop_id);
-  push(anyStore.storeId);
-  push(anyStore.store_id);
-  return ids;
-}
-
-function getItemStoreIds(item?: MenuItem | null): string[] {
-  if (!item) return [];
-  const ids: string[] = [];
-  const push = (val: unknown) => {
-    const id = normalizeIdString(val);
-    if (id && !ids.includes(id)) ids.push(id);
-  };
-  push(item.restaurantId);
-  const anyItem = item as unknown as Record<string, unknown>;
-  push(anyItem.restaurant_id);
-  push(anyItem.restaurant);
-  push(anyItem.shopId);
-  push(anyItem.shop_id);
-  push(anyItem.shop);
-  push(anyItem.storeId);
-  push(anyItem.store_id);
-  push(anyItem.store);
-  push(anyItem.userId);
-  push(anyItem.user_id);
-  return ids;
-}
-
-function getItemStoreName(item?: MenuItem | null): string {
-  if (!item) return '';
-  const anyItem = item as unknown as Record<string, unknown>;
-  const rawRest = item.restaurantId as unknown;
-  const rawRestObj = typeof rawRest === 'object' && rawRest !== null ? (rawRest as Record<string, unknown>) : null;
-  const anyRestObj = typeof anyItem.restaurant === 'object' && anyItem.restaurant !== null ? (anyItem.restaurant as Record<string, unknown>) : null;
-  const anyShopObj = typeof anyItem.shop === 'object' && anyItem.shop !== null ? (anyItem.shop as Record<string, unknown>) : null;
-  const anyStoreObj = typeof anyItem.store === 'object' && anyItem.store !== null ? (anyItem.store as Record<string, unknown>) : null;
-
-  const candidate = (
-    item.restaurantName ||
-    anyItem.restaurant_name ||
-    rawRestObj?.name ||
-    anyRestObj?.name ||
-    anyShopObj?.name ||
-    anyStoreObj?.name ||
-    anyItem.shopName ||
-    anyItem.shop_name ||
-    anyItem.storeName ||
-    anyItem.store_name ||
-    ''
-  );
-  return typeof candidate === 'string' ? candidate.trim() : '';
-}
-
-function itemBelongsToStore(item?: MenuItem | null, store?: Store | null): boolean {
-  if (!item || !store) return false;
-
-  // 1. Direct ID match
-  const storeIdStr = normalizeIdString(store._id || store.id);
-  const itemRestIdStr = normalizeIdString(item.restaurantId || (item as any).restaurant_id || (item as any).restaurant);
-  if (storeIdStr && itemRestIdStr && storeIdStr === itemRestIdStr) {
-    return true;
-  }
-
-  // 2. ID list intersection
-  const storeIds = getStoreIds(store);
-  const itemIds = getItemStoreIds(item);
-  for (const sId of storeIds) {
-    if (itemIds.includes(sId)) return true;
-  }
-
-  // 3. Store name match
-  const itemStoreName = getItemStoreName(item).toLowerCase();
-  const storeName = String(store.name || '').trim().toLowerCase();
-  if (itemStoreName && storeName) {
-    if (itemStoreName === storeName || itemStoreName.includes(storeName) || storeName.includes(itemStoreName)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function findStoreForItem(item?: MenuItem | null, allStores?: Store[] | null): Store | undefined {
-  if (!item || !Array.isArray(allStores)) return undefined;
-  return allStores.find((store) => itemBelongsToStore(item, store));
-}
-
-function formatRupees(value: number): string {
-  return `₹${Number(value || 0).toFixed(0)}`;
-}
-
-function addressSummary(address: Address): string {
-  const parts = [address.line1, address.line2, address.locality, address.city, address.postalCode]
-    .filter(Boolean);
-  if (address.digipin) {
-    parts.push(`DIGIPIN: ${formatDigipin(address.digipin)}`);
-  }
-  return parts.join(', ');
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
-}
-
-function VegBadge({ size = 13 }: { size?: number }) {
-  const dotSize = Math.max(4, Math.round(size * 0.45));
-  return (
-    <View
-      style={{
-        width: size,
-        height: size,
-        borderWidth: 1.5,
-        borderColor: '#0f8a3c',
-        borderRadius: 3,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#fff',
-      }}
-    >
-      <View
-        style={{
-          width: dotSize,
-          height: dotSize,
-          borderRadius: dotSize / 2,
-          backgroundColor: '#0f8a3c',
-        }}
-      />
-    </View>
-  );
-}
-
-function NonVegBadge({ size = 13 }: { size?: number }) {
-  const dotSize = Math.max(4, Math.round(size * 0.45));
-  return (
-    <View
-      style={{
-        width: size,
-        height: size,
-        borderWidth: 1.5,
-        borderColor: '#d83a32',
-        borderRadius: 3,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#fff',
-      }}
-    >
-      <View
-        style={{
-          width: dotSize,
-          height: dotSize,
-          borderRadius: dotSize / 2,
-          backgroundColor: '#d83a32',
-        }}
-      />
-    </View>
-  );
-}
-
-function isItemVeg(item?: MenuItem | null): boolean {
-  if (!item) return true;
-  const anyItem = item as MenuItem & { isVeg?: boolean; dietary?: string };
-  if (anyItem.isVeg !== undefined) return Boolean(anyItem.isVeg);
-  const dietary = (anyItem.dietary || '').toLowerCase();
-  if (dietary === 'veg' || dietary === 'vegan') return true;
-  if (dietary === 'non-veg' || dietary === 'nonveg') return false;
-  const text = `${item.name || ''} ${item.category || ''} ${item.description || ''}`.toLowerCase();
-  if (
-    text.includes('chicken') ||
-    text.includes('mutton') ||
-    text.includes('fish') ||
-    text.includes('egg') ||
-    text.includes('meat') ||
-    text.includes('prawn') ||
-    text.includes('pork') ||
-    text.includes('beef') ||
-    text.includes('non-veg') ||
-    text.includes('nonveg')
-  ) {
-    return false;
-  }
-  return true;
-}
-
-function getStoreDietary(
-  store: Store,
-  allItems: MenuItem[],
-): { hasVeg: boolean; hasNonVeg: boolean } {
-  const storeItems = allItems.filter((i) => itemBelongsToStore(i, store));
-  if (!storeItems.length) {
-    const storeText = `${store.name} ${store.cuisine || ''} ${store.category || ''}`.toLowerCase();
-    const isPureVeg = storeText.includes('pure veg') || storeText.includes('vegetarian');
-    const isExplicitNonVeg =
-      storeText.includes('chicken') ||
-      storeText.includes('mutton') ||
-      storeText.includes('meat') ||
-      storeText.includes('non-veg');
-    if (isPureVeg) return { hasVeg: true, hasNonVeg: false };
-    if (isExplicitNonVeg) return { hasVeg: false, hasNonVeg: true };
-    return { hasVeg: true, hasNonVeg: false };
-  }
-
-  let hasVeg = false;
-  let hasNonVeg = false;
-  for (const item of storeItems) {
-    if (isItemVeg(item)) {
-      hasVeg = true;
-    } else {
-      hasNonVeg = true;
-    }
-  }
-  return { hasVeg, hasNonVeg };
-}
-
-function getCategoryIcon(categoryName?: string | null, mode?: BrowseMode): string {
-  const norm = (categoryName || '').trim().toLowerCase();
-  if (norm.includes('biryani')) return '🍲';
-  if (norm.includes('pizza')) return '🍕';
-  if (norm.includes('burger')) return '🍔';
-  if (norm.includes('chinese') || norm.includes('noodle') || norm.includes('chow')) return '🍜';
-  if (norm.includes('main') || norm.includes('curry') || norm.includes('thali') || norm.includes('gravy')) return '🥘';
-  if (norm.includes('bread') || norm.includes('naan') || norm.includes('roti') || norm.includes('paratha')) return '🫓';
-  if (norm.includes('snack') || norm.includes('chaat') || norm.includes('fry') || norm.includes('fries') || norm.includes('samosa') || norm.includes('momos')) return '🍟';
-  if (norm.includes('beverage') || norm.includes('drink') || norm.includes('tea') || norm.includes('chai') || norm.includes('coffee') || norm.includes('shake') || norm.includes('juice')) return '🧋';
-  if (norm.includes('sweet') || norm.includes('mithai') || norm.includes('dessert') || norm.includes('ice cream') || norm.includes('halwa')) return '🍨';
-  if (norm.includes('south') || norm.includes('dosa') || norm.includes('idli') || norm.includes('vada')) return '🥞';
-  if (norm.includes('cake') || norm.includes('bakery') || norm.includes('pastry')) return '🍰';
-  if (norm.includes('grocer') || norm.includes('staple') || norm.includes('atta') || norm.includes('rice') || norm.includes('dal') || norm.includes('oil')) return '🥫';
-  if (norm.includes('dairy') || norm.includes('milk') || norm.includes('egg') || norm.includes('paneer') || norm.includes('butter') || norm.includes('cheese') || norm.includes('curd')) return '🥛';
-  if (norm.includes('fruit') || norm.includes('veg') || norm.includes('produce')) return '🥦';
-  if (norm.includes('meat') || norm.includes('chicken') || norm.includes('fish') || norm.includes('mutton') || norm.includes('kebab')) return '🍗';
-  if (norm.includes('packaged') || norm.includes('biscuit') || norm.includes('instant') || norm.includes('namkeen')) return '📦';
-  if (norm.includes('personal') || norm.includes('care') || norm.includes('soap') || norm.includes('shampoo')) return '🧴';
-  if (norm.includes('clean') || norm.includes('household') || norm.includes('detergent')) return '🧼';
-  return mode === 'shop' ? '🛍️' : '🍽️';
-}
-
-function itemMatchesCategory(item?: MenuItem | null, category?: string | null): boolean {
-  if (!item) return false;
-  if (!category || category.toLowerCase() === 'all') return true;
-  const target = category.toLowerCase().trim();
-  const itemCat = (item.category || '').toLowerCase().trim();
-  const itemName = (item.name || '').toLowerCase().trim();
-  const itemDesc = (item.description || '').toLowerCase().trim();
-
-  if (itemCat === target) return true;
-  if (itemCat && (itemCat.includes(target) || target.includes(itemCat))) return true;
-  if (itemName.includes(target)) return true;
-  if (itemDesc.includes(target)) return true;
-
-  // Keyword associations for popular food & grocery categories
-  if (target === 'biryani' && (itemName.includes('biryani') || itemCat.includes('biryani'))) return true;
-  if (target === 'pizza' && (itemName.includes('pizza') || itemCat.includes('pizza'))) return true;
-  if (target === 'burger' && (itemName.includes('burger') || itemCat.includes('burger'))) return true;
-  if (target === 'breads' && (itemName.includes('naan') || itemName.includes('roti') || itemName.includes('paratha') || itemName.includes('kulcha') || itemCat.includes('bread'))) return true;
-  if (target === 'chinese' && (itemName.includes('noodle') || itemName.includes('manchurian') || itemName.includes('chow') || itemName.includes('fried rice') || itemCat.includes('chinese'))) return true;
-  if (target === 'beverage' && (itemName.includes('shake') || itemName.includes('juice') || itemName.includes('tea') || itemName.includes('coffee') || itemName.includes('drink') || itemCat.includes('beverage'))) return true;
-  if (target === 'sweets' && (itemName.includes('sweet') || itemName.includes('halwa') || itemName.includes('gulab') || itemName.includes('rasgulla') || itemName.includes('ice cream') || itemCat.includes('sweet') || itemCat.includes('dessert'))) return true;
-  if (target === 'snacks' && (itemName.includes('snack') || itemName.includes('samosa') || itemName.includes('pakoda') || itemName.includes('fry') || itemName.includes('chaat') || itemCat.includes('snack'))) return true;
-  if (target === 'main course' && (itemCat.includes('main') || itemName.includes('curry') || itemName.includes('paneer') || itemName.includes('dal') || itemName.includes('masala') || itemName.includes('gravy') || itemName.includes('thali') || itemName.includes('korma'))) return true;
-  if (target === 'groceries' && (itemCat.includes('grocer') || itemName.includes('oil') || itemName.includes('atta') || itemName.includes('rice') || itemName.includes('dal') || itemName.includes('sugar') || itemName.includes('salt'))) return true;
-  if (target.includes('dairy') && (itemCat.includes('dairy') || itemName.includes('milk') || itemName.includes('paneer') || itemName.includes('butter') || itemName.includes('curd') || itemName.includes('cheese') || itemName.includes('egg'))) return true;
-
-  return false;
-}
-
-function storeMatchesCategory(store: Store, category: string, itemsList: MenuItem[]): boolean {
-  if (!category || category.toLowerCase() === 'all') return true;
-  const target = category.toLowerCase().trim();
-  const cuisine = (store.cuisine || '').toLowerCase();
-  const cat = (store.category || '').toLowerCase();
-
-  if (cuisine.includes(target) || cat.includes(target)) return true;
-
-  // Keyword associations for store cuisine/category
-  if (target === 'chinese' && (cuisine.includes('chinese') || cat.includes('chinese'))) return true;
-  if (target === 'biryani' && (cuisine.includes('biryani') || cuisine.includes('mughlai') || cuisine.includes('hyderabadi'))) return true;
-  if (target === 'pizza' && (cuisine.includes('pizza') || cuisine.includes('italian'))) return true;
-  if (target === 'main course' && (cuisine.includes('north indian') || cuisine.includes('indian') || cuisine.includes('thali') || cuisine.includes('mughlai'))) return true;
-  if (target === 'groceries' && (cuisine.includes('grocer') || cat.includes('grocer') || cat.includes('supermarket'))) return true;
-
-  // Check if store sells ANY item in this category:
-  return itemsList.some((item) => {
-    if (!itemBelongsToStore(item, store)) return false;
-    return itemMatchesCategory(item, category);
-  });
-}
 
 type HeroBannerItem = {
   id: string;
@@ -615,7 +294,7 @@ const HERO_BANNERS: HeroBannerItem[] = [
   },
 ];
 
-export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }: Props) {
+export default function CustomerApp({ session, onSignOut, onSessionUserUpdate, onRequestSignIn }: Props) {
   const [tab, setTab] = useState<Tab>('browse');
   const [mode, setMode] = useState<BrowseMode>('restaurant');
   const [dietaryFilter, setDietaryFilter] = useState<'all' | 'veg' | 'non-veg'>('all');
@@ -825,6 +504,12 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
   };
 
   const [areaMessage, setAreaMessage] = useState('');
+  const [serviceAreas, setServiceAreas] = useState<ServiceArea[]>([]);
+  const lastAlertedServiceKey = useRef<string>('');
+  const [currentGpsCoords, setCurrentGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [currentGpsPincode, setCurrentGpsPincode] = useState<string>('');
+  const [currentGpsCity, setCurrentGpsCity] = useState<string>('');
+  const [isLocating, setIsLocating] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
@@ -838,6 +523,8 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
   const [savingAddress, setSavingAddress] = useState(false);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [paymentModalVisible, setPaymentModalVisible] = useState(false);
+  const [couponDropdownExpanded, setCouponDropdownExpanded] = useState(false);
+  const [paymentDropdownExpanded, setPaymentDropdownExpanded] = useState(true);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod>('razorpay');
   const [upiId, setUpiId] = useState('');
   const [cardForm, setCardForm] = useState({
@@ -855,11 +542,100 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     city: '',
     state: '',
     postalCode: '',
-    phone: session.user.phone || '',
-    digipin: session.user.digipin || '',
+    phone: session?.user?.phone || '',
+    digipin: session?.user?.digipin || '',
     coordinates: [] as number[],
   });
   const [detectingGps, setDetectingGps] = useState(false);
+
+  const defaultAddress = useMemo(
+    () => addresses.find((address) => address.isDefault) || addresses[0],
+    [addresses]
+  );
+  const currentAddress = useMemo(() => {
+    if (!session || selectedAddressId === 'current_location' || !addresses.length) {
+      return undefined;
+    }
+    if (selectedAddressId) {
+      return addresses.find((address) => address._id === selectedAddressId) || defaultAddress;
+    }
+    return defaultAddress;
+  }, [session, addresses, selectedAddressId, defaultAddress]);
+
+  const hasSelectedAddress = Boolean(currentAddress && selectedAddressId !== 'current_location');
+  const activeCustomerPincode = useMemo(() => {
+    return hasSelectedAddress && currentAddress ? getAddressPincode(currentAddress) : currentGpsPincode;
+  }, [hasSelectedAddress, currentAddress, currentGpsPincode]);
+
+  // Automatically switch to default address after login
+  const prevSessionTokenRef = useRef<string | null>(session?.token || null);
+  useEffect(() => {
+    const currentToken = session?.token || null;
+    const isNewLogin = !prevSessionTokenRef.current && Boolean(currentToken);
+    prevSessionTokenRef.current = currentToken;
+
+    if (isNewLogin) {
+      void loadAddresses().then(() => {
+        void loadBrowse(false);
+      });
+    }
+  }, [session?.token]);
+
+  useEffect(() => {
+    if (session && addresses.length > 0) {
+      if (!selectedAddressId || selectedAddressId === 'current_location') {
+        const preferred = addresses.find((a) => a.isDefault) || addresses[0];
+        if (preferred) {
+          setSelectedAddressId(preferred._id);
+        }
+      }
+    }
+  }, [session, addresses]);
+
+  const detectDeviceLocation = useCallback(async (silent = false) => {
+    if (isLocating) return;
+    setIsLocating(true);
+    try {
+      let permission = await Location.getForegroundPermissionsAsync();
+      if (!permission.granted) {
+        if (silent) {
+          setIsLocating(false);
+          return;
+        }
+        permission = await Location.requestForegroundPermissionsAsync();
+      }
+      if (!permission.granted) {
+        if (!silent) {
+          Alert.alert('Location permission needed', 'Please enable location permission to view restaurants and shops near your current location.');
+        }
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const lat = Number(pos.coords.latitude.toFixed(6));
+      const lng = Number(pos.coords.longitude.toFixed(6));
+      setCurrentGpsCoords({ lat, lng });
+
+      try {
+        const reverse = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+        if (reverse && reverse[0]) {
+          const revPin = extractPincode(reverse[0].postalCode || '') || reverse[0].postalCode || '';
+          const revCity = reverse[0].city || reverse[0].subregion || '';
+          if (revPin) setCurrentGpsPincode(revPin);
+          if (revCity) setCurrentGpsCity(revCity);
+        }
+      } catch {}
+    } catch (e) {
+      if (!silent) console.warn('Failed to detect device location:', e);
+    } finally {
+      setIsLocating(false);
+    }
+  }, [isLocating]);
+
+  useEffect(() => {
+    if (!selectedAddressId || selectedAddressId === 'current_location' || !addresses.length) {
+      void detectDeviceLocation(true);
+    }
+  }, [selectedAddressId, addresses.length, detectDeviceLocation]);
 
   const allStores = useMemo(() => [...restaurants, ...shops], [restaurants, shops]);
   const allMenuItems = useMemo(() => [...restaurantItems, ...shopItems], [restaurantItems, shopItems]);
@@ -882,6 +658,16 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       const ownerStore = findStoreForItem(item, allStores);
       // When restaurant or shop is closed, do not display its items
       if (ownerStore && !isStoreOpen(ownerStore)) {
+        return false;
+      }
+      // Filter out items whose store is not in the customer's selected address/pincode serviceable area
+      if (ownerStore && !isStoreServiceableForCustomer({
+        store: ownerStore,
+        custPin: hasSelectedAddress ? activeCustomerPincode : undefined,
+        serviceAreas,
+        custCoords: currentGpsCoords,
+        gpsPin: !hasSelectedAddress ? currentGpsPincode : undefined,
+      })) {
         return false;
       }
       const anyItem = item as Record<string, unknown>;
@@ -926,7 +712,20 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
         && item.isAvailable !== false
         && (item.quantity === undefined || item.quantity > 0);
     });
-  }, [menuItems, search, selectedStoreId, selectedStore, allStores, dietaryFilter, selectedCategory]);
+  }, [
+    menuItems,
+    search,
+    selectedStoreId,
+    selectedStore,
+    allStores,
+    dietaryFilter,
+    selectedCategory,
+    hasSelectedAddress,
+    activeCustomerPincode,
+    serviceAreas,
+    currentGpsCoords,
+    currentGpsPincode,
+  ]);
 
   const visibleStores = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
@@ -935,14 +734,41 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     const matchedStores: Store[] = [];
     const addedStoreKeys = new Set<string>();
 
+    const isServiceableForCustomer = (store: Store) => {
+      const activePin = hasSelectedAddress
+        ? activeCustomerPincode
+        : currentGpsPincode || activeCustomerPincode;
+      return isStoreServiceableForCustomer({
+        store,
+        custPin: activePin || undefined,
+        serviceAreas,
+        custCoords: currentGpsCoords,
+        gpsPin: !hasSelectedAddress ? currentGpsPincode : undefined,
+      });
+    };
+
     const addStore = (store: Store) => {
       // Must be currently open and approved
       if (!isStoreOpen(store)) return;
       if (store.isServiceable === false) return;
+      if (!isServiceableForCustomer(store)) return;
       const key = (normalizeIdString(store._id || store.id) || String(store.name || '').trim().toLowerCase());
       if (!key || addedStoreKeys.has(key)) return;
       addedStoreKeys.add(key);
       matchedStores.push(store);
+    };
+
+    const sortStoresByProximity = (list: Store[]) => {
+      if (!hasSelectedAddress && currentGpsCoords) {
+        return [...list].sort((a, b) => {
+          const coordsA = getStoreCoordinates(a);
+          const coordsB = getStoreCoordinates(b);
+          const distA = coordsA ? calculateDistanceKm(currentGpsCoords.lat, currentGpsCoords.lng, coordsA.lat, coordsA.lng) : (a.distanceKm ?? 999);
+          const distB = coordsB ? calculateDistanceKm(currentGpsCoords.lat, currentGpsCoords.lng, coordsB.lat, coordsB.lng) : (b.distanceKm ?? 999);
+          return distA - distB;
+        });
+      }
+      return list;
     };
 
     const storePassesDietary = (store: Store) => {
@@ -994,16 +820,18 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
         }
       }
 
-      return matchedStores;
+      return sortStoresByProximity(matchedStores);
     }
 
     // 2. When NOT searching and NO category selected:
     if (!query) {
-      return stores.filter((store) => {
+      const filtered = stores.filter((store) => {
         if (!isStoreOpen(store)) return false;
         if (store.isServiceable === false) return false;
+        if (!isServiceableForCustomer(store)) return false;
         return storePassesDietary(store);
       });
+      return sortStoresByProximity(filtered);
     }
 
     // 3. When searching (with or without category):
@@ -1065,8 +893,23 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       }
     }
 
-    return matchedStores;
-  }, [search, stores, allStores, menuItems, allMenuItems, visibleItems, dietaryFilter, mode, selectedCategory]);
+    return sortStoresByProximity(matchedStores);
+  }, [
+    search,
+    stores,
+    allStores,
+    menuItems,
+    allMenuItems,
+    visibleItems,
+    dietaryFilter,
+    mode,
+    selectedCategory,
+    hasSelectedAddress,
+    activeCustomerPincode,
+    serviceAreas,
+    currentGpsCoords,
+    currentGpsPincode,
+  ]);
 
   const displayedCategories = useMemo(() => {
     const defaultList = mode === 'shop'
@@ -1104,10 +947,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       image: findImageForCategory(name),
     }));
   }, [mode, menuItems, allMenuItems]);
-  const defaultAddress = addresses.find((address) => address.isDefault) || addresses[0];
-  const currentAddress = addresses.find((address) => address._id === selectedAddressId)
-    || defaultAddress;
-  const defaultPostalCode = currentAddress?.postalCode || defaultAddress?.postalCode || session?.user?.pincode || session?.user?.postalCode || '';
+  const defaultPostalCode = activeCustomerPincode || defaultAddress?.postalCode || session?.user?.pincode || session?.user?.postalCode || '';
   const subtotal = useMemo(
     () => cart.reduce((total, item) => total + Number(item.price) * item.quantity, 0),
     [cart],
@@ -1119,25 +959,188 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
   const couponDiscount = couponValidation?.valid ? Number(couponValidation.totalDiscount || 0) : 0;
   const estimatedTotal = subtotal ? Math.max(0, subtotal + subtotal * 0.05 + 40 - couponDiscount) : 0;
 
-  async function loadBrowse(showSpinner = true) {
+  const cartStore = useMemo(() => {
+    if (!cart.length) return undefined;
+    const firstItem = cart[0];
+    return allStores.find((store) => {
+      const ids = getStoreIds(store);
+      return ids.includes(normalizeIdString(firstItem.restaurantId)) || itemBelongsToStore(firstItem, store);
+    }) || allStores.find((store) => storeId(store) === firstItem.restaurantId);
+  }, [cart, allStores]);
+
+  const cartCustPin = useMemo(() => getAddressPincode(currentAddress), [currentAddress]);
+  const cartStorePin = useMemo(() => getStorePincode(cartStore, cart[0]), [cartStore, cart]);
+
+  const cartServiceability: ServiceAreaCheckResult = useMemo(() => {
+    if (!cart.length || !currentAddress) {
+      return { isServiceable: true, custPin: cartCustPin, storePin: cartStorePin };
+    }
+    return checkServiceAreaMatch({
+      custPin: cartCustPin,
+      storePin: cartStorePin,
+      serviceAreas,
+      isStoreServiceable: cartStore?.isServiceable,
+      areaMessage,
+    });
+  }, [cart, currentAddress, cartCustPin, cartStorePin, cartStore, serviceAreas, areaMessage]);
+
+  const showTooFarPopup = useCallback((checkResult?: ServiceAreaCheckResult) => {
+    const res = checkResult || cartServiceability;
+    const cust = res.custPin || 'N/A';
+    const store = res.storePin || 'N/A';
+    Alert.alert(
+      'Restaurant is too far',
+      `Customer selected address pincode (${cust}) and restaurant pincode (${store}) are not in the same serviceable area list pincode.\n\nPayment is not allowed before updating the address and pincode to a serviceable location. Please update your delivery address or choose another restaurant.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Update Address',
+          style: 'default',
+          onPress: () => {
+            setTab('addresses');
+            setAddressFormVisible(true);
+          },
+        },
+      ],
+    );
+  }, [cartServiceability]);
+
+  useEffect(() => {
+    apiRequest<{ pincodes?: string[]; adminZones?: any }>(
+      '/api/customer/serviceable-pincodes',
+    )
+      .then((res) => {
+        let apiAreas: ServiceArea[] = [];
+        if (Array.isArray(res?.adminZones)) {
+          apiAreas = res.adminZones
+            .map((zone: any, idx: number) => ({
+              id: zone.adminId || `zone-${idx}`,
+              name: zone.adminName || zone.name || `Admin Zone ${idx + 1}`,
+              pincodes: Array.isArray(zone.pincodes)
+                ? zone.pincodes
+                    .map((p: any) => extractPincode(p) || String(p).trim())
+                    .filter(Boolean)
+                : [],
+              createdAt: new Date().toISOString(),
+            }))
+            .filter((a: ServiceArea) => a.pincodes.length > 0);
+        } else if (res?.adminZones && typeof res.adminZones === 'object') {
+          apiAreas = Object.entries(res.adminZones)
+            .map(([zoneName, pins]) => ({
+              id: `zone-${zoneName}`,
+              name: zoneName,
+              pincodes: Array.isArray(pins)
+                ? (pins as any[])
+                    .map((p: any) => extractPincode(p) || String(p).trim())
+                    .filter(Boolean)
+                : [],
+              createdAt: new Date().toISOString(),
+            }))
+            .filter((a: ServiceArea) => a.pincodes.length > 0);
+        }
+        if (apiAreas.length === 0 && Array.isArray(res?.pincodes) && res.pincodes.length > 0) {
+          const cleanPins = res.pincodes
+            .map((p: any) => extractPincode(p) || String(p).trim())
+            .filter(Boolean);
+          apiAreas = [
+            {
+              id: 'zone-default',
+              name: 'Primary Service Zone',
+              pincodes: cleanPins,
+              createdAt: new Date().toISOString(),
+            },
+          ];
+        }
+        if (apiAreas.length > 0) {
+          setServiceAreas(apiAreas);
+          void persistServiceAreas(apiAreas);
+        }
+      })
+      .catch(() => {
+        void loadStoredServiceAreas().then((stored) => {
+          if (stored && stored.length > 0) {
+            setServiceAreas(stored);
+          }
+        });
+      });
+  }, [tab]);
+
+  useEffect(() => {
+    if (tab === 'cart' && cart.length > 0 && currentAddress && !cartServiceability.isServiceable) {
+      const alertKey = `${currentAddress._id}_${cartStore?._id || cart[0]?.restaurantId}_${cartServiceability.custPin}_${cartServiceability.storePin}`;
+      if (lastAlertedServiceKey.current !== alertKey) {
+        lastAlertedServiceKey.current = alertKey;
+        setError(cartServiceability.reason || 'Restaurant is too far: Customer selected address pincode and restaurant pincode are not in the same serviceable area list pincode.');
+        showTooFarPopup(cartServiceability);
+      }
+    }
+  }, [tab, cart.length, currentAddress, cartStore?._id, cartServiceability, showTooFarPopup]);
+
+  async function loadBrowse(
+    showSpinner = true,
+    customPin?: string,
+    customCoords?: { lat: number; lng: number } | null,
+  ) {
     if (showSpinner) setLoading(true);
     setError('');
+
+    const targetPin =
+      customPin !== undefined
+        ? customPin
+        : hasSelectedAddress && currentAddress
+          ? getAddressPincode(currentAddress)
+          : currentGpsPincode;
+
+    const targetCoords =
+      customCoords !== undefined
+        ? customCoords
+        : hasSelectedAddress &&
+            currentAddress &&
+            Array.isArray(currentAddress.coordinates) &&
+            currentAddress.coordinates.length === 2
+          ? { lat: currentAddress.coordinates[1], lng: currentAddress.coordinates[0] }
+          : currentGpsCoords;
+
+    const targetDigipin =
+      hasSelectedAddress && currentAddress?.digipin ? currentAddress.digipin : '';
+
+    const queryParts: string[] = [];
+    if (targetPin) queryParts.push(`pincode=${encodeURIComponent(targetPin)}`);
+    if (targetCoords) {
+      queryParts.push(`lat=${encodeURIComponent(targetCoords.lat)}`);
+      queryParts.push(`lng=${encodeURIComponent(targetCoords.lng)}`);
+    }
+    if (targetDigipin) queryParts.push(`digipin=${encodeURIComponent(targetDigipin)}`);
+    const queryString = queryParts.length ? `?${queryParts.join('&')}` : '';
+
     try {
       const [restaurantResult, shopResult, restaurantMenu, shopMenu] = await Promise.all([
-        apiRequest<{ restaurants: Store[]; isServiceable?: boolean; message?: string }>('/api/customer/restaurants', session.token),
-        apiRequest<{ shops: Store[]; isServiceable?: boolean; message?: string }>('/api/customer/shops', session.token),
-        apiRequest<{ menu: MenuItem[] }>('/api/customer/menu?type=restaurant', session.token),
-        apiRequest<{ menu: MenuItem[] }>('/api/customer/menu?type=shop', session.token),
+        apiRequest<{ restaurants: Store[]; isServiceable?: boolean; message?: string }>(
+          `/api/customer/restaurants${queryString}`,
+          session?.token,
+        ),
+        apiRequest<{ shops: Store[]; isServiceable?: boolean; message?: string }>(
+          `/api/customer/shops${queryString}`,
+          session?.token,
+        ),
+        apiRequest<{ menu: MenuItem[] }>(
+          `/api/customer/menu?type=restaurant${targetPin ? `&pincode=${encodeURIComponent(targetPin)}` : ''}`,
+          session?.token,
+        ),
+        apiRequest<{ menu: MenuItem[] }>(
+          `/api/customer/menu?type=shop${targetPin ? `&pincode=${encodeURIComponent(targetPin)}` : ''}`,
+          session?.token,
+        ),
       ]);
-      setRestaurants(restaurantResult.restaurants);
-      setShops(shopResult.shops);
+      setRestaurants(restaurantResult.restaurants || []);
+      setShops(shopResult.shops || []);
       setAreaMessage(
         restaurantResult.isServiceable || shopResult.isServiceable
           ? ''
           : restaurantResult.message || shopResult.message || '',
       );
-      setRestaurantItems(restaurantMenu.menu);
-      setShopItems(shopMenu.menu);
+      setRestaurantItems(restaurantMenu.menu || []);
+      setShopItems(shopMenu.menu || []);
     } catch (reason) {
       setError(getErrorMessage(reason));
     } finally {
@@ -1146,7 +1149,17 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     }
   }
 
+  useEffect(() => {
+    if (tab === 'browse' || tab === 'cart') {
+      void loadBrowse(false);
+    }
+  }, [activeCustomerPincode, currentGpsCoords?.lat, currentGpsCoords?.lng, selectedAddressId, tab]);
+
   async function loadAddresses() {
+    if (!session?.token) {
+      setAddresses([]);
+      return;
+    }
     setError('');
     try {
       const result = await apiRequest<{ addresses: Address[] }>(
@@ -1163,6 +1176,10 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
   }
 
   async function loadOrders() {
+    if (!session?.token) {
+      setOrders([]);
+      return;
+    }
     setError('');
     try {
       const result = await apiRequest<{ orders: Order[] }>(
@@ -1189,7 +1206,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     try {
       const result = await apiRequest<{ bill: Bill }>(
         `/api/customer/orders/${encodeURIComponent(orderId)}/bill`,
-        session.token,
+        session?.token,
       );
       setBills((current) => ({ ...current, [orderId]: result.bill }));
     } catch (reason) {
@@ -1202,7 +1219,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
   async function loadAvailableCoupons() {
     setError('');
     try {
-      const result = await apiRequest<{ coupons?: Coupon[] }>('/api/customer/coupons', session.token);
+      const result = await apiRequest<{ coupons?: Coupon[] }>('/api/customer/coupons', session?.token);
       setAvailableCoupons(result.coupons || []);
     } catch (reason) {
       setError(getErrorMessage(reason));
@@ -1223,7 +1240,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     try {
       const storeType = cart[0].storeType || (cart[0].isShopItem ? 'shop' : 'restaurant');
       const store = [...restaurants, ...shops].find((candidate) => storeId(candidate) === cart[0].restaurantId);
-      const result = await apiRequest<CouponValidation>('/api/customer/coupons/validate', session.token, {
+      const result = await apiRequest<CouponValidation>('/api/customer/coupons/validate', session?.token, {
         method: 'POST',
         body: JSON.stringify({
           couponCodes: [code.trim()],
@@ -1283,7 +1300,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     try {
       const result = await apiRequest<{ tracking: OrderTracking }>(
         `/api/customer/orders/${encodeURIComponent(orderId)}/live-tracking`,
-        session.token,
+        session?.token,
       );
       if (!result.tracking) {
         throw new Error('Tomato did not return tracking details for this order.');
@@ -1329,13 +1346,13 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     try {
       await apiRequest(
         `/api/customer/items/${encodeURIComponent(reviewTarget.itemId)}/reviews`,
-        session.token,
+        session?.token,
         {
           method: 'POST',
           body: JSON.stringify({
             rating: reviewRating,
             comment: reviewComment.trim(),
-            name: session.user.name || '',
+            name: session?.user?.name || '',
           }),
         },
       );
@@ -1357,7 +1374,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     try {
       const result = await apiRequest<{ notifications: CustomerNotification[] }>(
         '/api/customer/notifications',
-        session.token,
+        session?.token,
       );
       setNotifications(result.notifications || []);
     } catch (reason) {
@@ -1371,19 +1388,19 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     void loadBrowse();
     void loadAddresses();
     void loadOrders();
-  }, [session.token]);
+  }, [session?.token]);
 
   useEffect(() => {
     if (tab === 'orders') void loadOrders();
     if (tab === 'addresses') void loadAddresses();
     if (tab === 'cart') void loadAvailableCoupons();
-  }, [tab, session.token]);
+  }, [tab, session?.token]);
 
   useEffect(() => {
-    if (tab !== 'orders') return;
+    if (tab !== 'orders' || !session?.token) return;
     const interval = setInterval(() => void loadOrders(), 20_000);
     return () => clearInterval(interval);
-  }, [tab, session.token]);
+  }, [tab, session?.token]);
 
   useEffect(() => {
     if (tab !== 'orders' || !trackingOrderId) return;
@@ -1396,7 +1413,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       try {
         const result = await apiRequest<{ tracking: OrderTracking }>(
           `/api/customer/orders/${encodeURIComponent(trackingOrderId)}/live-tracking`,
-          session.token,
+          session?.token,
         );
         if (result.tracking) {
           setTrackingByOrder((current) => ({
@@ -1422,7 +1439,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       }
     }, 30_000);
     return () => clearInterval(interval);
-  }, [tab, trackingOrderId, trackingByOrder[trackingOrderId]?.trackingClosed, orders, session.token]);
+  }, [tab, trackingOrderId, trackingByOrder[trackingOrderId]?.trackingClosed, orders, session?.token]);
 
 
 
@@ -1576,6 +1593,51 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       setError('Enter a valid delivery DIGIPIN (e.g. 10 alphanumeric characters).');
       return;
     }
+
+    const pin = extractPincode(addressForm.postalCode) || addressForm.postalCode.trim();
+    if (!pin || pin.length < 5) {
+      setError('Enter a valid postal pincode (e.g. 6 digits).');
+      return;
+    }
+
+    // Follow the rule of serviceable area list pincode:
+    if (serviceAreas.length > 0) {
+      const allPins = getAllServiceablePincodes(serviceAreas);
+      if (allPins.length > 0 && !allPins.includes(pin)) {
+        const errorMsg = `Pincode ${pin} is outside Tomato's serviceable areas. Please enter an address with a serviceable pincode (${allPins.join(', ')}).`;
+        setError(errorMsg);
+        Alert.alert('Address Outside Serviceable Area', errorMsg, [{ text: 'OK' }]);
+        return;
+      }
+    }
+
+    // If there is an active item in cart, verify it matches the restaurant serviceable area
+    if (cart.length > 0 && cartStore) {
+      const storePin = getStorePincode(cartStore, cart[0]);
+      const match = checkServiceAreaMatch({
+        custPin: pin,
+        storePin,
+        serviceAreas,
+        isStoreServiceable: cartStore.isServiceable,
+      });
+      if (!match.isServiceable) {
+        const errorMsg = `Restaurant is too far: The entered address pincode (${pin}) and restaurant pincode (${storePin || 'N/A'}) are not in the same serviceable area list pincode.`;
+        setError(errorMsg);
+        Alert.alert(
+          'Restaurant is too far',
+          `${errorMsg}\n\nPlease enter an address within the restaurant's serviceable area or choose another restaurant.`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+    }
+
+    if (!session?.token) {
+      setError('Please login first to save your delivery address.');
+      if (onRequestSignIn) onRequestSignIn();
+      return;
+    }
+
     setSavingAddress(true);
     setError('');
     try {
@@ -1589,7 +1651,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
           ? addressForm.coordinates
           : existingAddress?.coordinates || existingAddress?.location?.coordinates || [];
 
-      await apiRequest(
+      const savedRes = await apiRequest<{ address: Address }>(
         editingAddressId
           ? `/api/customer/addresses/${editingAddressId}`
           : '/api/customer/addresses',
@@ -1598,6 +1660,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
           method: editingAddressId ? 'PUT' : 'POST',
           body: JSON.stringify({
             ...addressForm,
+            postalCode: pin,
             label: addressForm.label.trim() || 'Home',
             digipin: cleanDigipin,
             coordinates: coords,
@@ -1614,12 +1677,15 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
         city: '',
         state: '',
         postalCode: '',
-        phone: session.user.phone || '',
-        digipin: session.user.digipin || '',
+        phone: session?.user?.phone || '',
+        digipin: session?.user?.digipin || '',
         coordinates: [],
       });
       setAddressFormVisible(false);
       setEditingAddressId('');
+      if (savedRes?.address?._id) {
+        setSelectedAddressId(savedRes.address._id);
+      }
       await loadAddresses();
       await loadBrowse(false);
     } catch (reason) {
@@ -1630,6 +1696,10 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
   }
 
   async function setDefaultAddress(addressId: string) {
+    if (!session?.token) {
+      if (onRequestSignIn) onRequestSignIn();
+      return;
+    }
     setError('');
     try {
       await apiRequest(`/api/customer/addresses/${addressId}/default`, session.token, {
@@ -1663,7 +1733,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
       city: address.city,
       state: address.state || '',
       postalCode: address.postalCode,
-      phone: address.phone || session.user.phone || '',
+      phone: address.phone || session?.user?.phone || '',
       digipin: address.digipin || '',
       coordinates: address.coordinates || address.location?.coordinates || [],
     });
@@ -1678,6 +1748,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
         text: 'Remove',
         style: 'destructive',
         onPress: async () => {
+          if (!session?.token) return;
           setError('');
           try {
             await apiRequest(`/api/customer/addresses/${address._id}`, session.token, {
@@ -1693,12 +1764,122 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     ]);
   }
 
+  function checkCurrentLocationServiceability(): { isServiceable: boolean; reason?: string } {
+    const cleanGpsPin = extractPincode(currentGpsPincode) || currentGpsPincode.trim();
+    if (!cleanGpsPin) {
+      return { isServiceable: true };
+    }
+
+    if (cartStore) {
+      const storePin = getStorePincode(cartStore, cart[0]);
+      const match = checkServiceAreaMatch({
+        custPin: cleanGpsPin,
+        storePin,
+        serviceAreas,
+        isStoreServiceable: cartStore.isServiceable,
+        areaMessage,
+      });
+      if (!match.isServiceable) {
+        return {
+          isServiceable: false,
+          reason: `Your location is out of serviceable area: Current location pincode (${cleanGpsPin}) and restaurant pincode (${storePin || 'N/A'}) are not in the same serviceable area list pincode.`,
+        };
+      }
+    }
+
+    if (serviceAreas.length > 0) {
+      const allPins = getAllServiceablePincodes(serviceAreas);
+      if (allPins.length > 0 && !allPins.includes(cleanGpsPin)) {
+        return {
+          isServiceable: false,
+          reason: `Your location is out of serviceable area: Current location pincode (${cleanGpsPin}) is not in the serviceable area list pincode (${allPins.join(', ')}).`,
+        };
+      }
+    }
+
+    return { isServiceable: true };
+  }
+
   function startPaymentFlow() {
     if (!cart.length) return;
-    if (!currentAddress) {
-      setError('Add a delivery address before placing your order.');
-      setTab('addresses');
-      setAddressFormVisible(true);
+
+    // Check if current location pincode is not in the serviceable area list pincode
+    if (!hasSelectedAddress || !session) {
+      const locCheck = checkCurrentLocationServiceability();
+      if (!locCheck.isServiceable) {
+        const msg = locCheck.reason || `Your location is out of serviceable area. Current location pincode (${currentGpsPincode || 'N/A'}) is not in the serviceable area list pincode.`;
+        setError(msg);
+        Alert.alert(
+          'Location Out of Serviceable Area',
+          `${msg}\n\nPayment is not allowed before updating your location to a serviceable area.`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+    }
+
+    // Check if customer is attempting payment before login
+    if (!session) {
+      const loginMsg = 'Please login first before making payment.';
+      setError(loginMsg);
+      Alert.alert(
+        'Please login first',
+        'You must sign in to your Tomato account to proceed with payment and complete your order.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Sign in / Register',
+            style: 'default',
+            onPress: () => {
+              if (onRequestSignIn) {
+                onRequestSignIn();
+              }
+            },
+          },
+        ]
+      );
+      return;
+    }
+
+    // Check if delivery address is not set
+    if (!currentAddress || selectedAddressId === 'current_location' || !addresses.length) {
+      const addrMsg = 'Please add a delivery address before making payment.';
+      setError(addrMsg);
+      Alert.alert(
+        'Delivery Address Required',
+        'Your delivery address is not set. Please add a delivery address to complete your order. Note: The address must follow the rule of our serviceable area list pincodes.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Add Address',
+            style: 'default',
+            onPress: () => {
+              setTab('addresses');
+              setEditingAddressId('');
+              setAddressForm({
+                label: 'Home',
+                line1: '',
+                line2: '',
+                locality: currentGpsCity || '',
+                city: currentGpsCity || '',
+                state: '',
+                postalCode: currentGpsPincode || '',
+                phone: session?.user?.phone || '',
+                digipin: session?.user?.digipin || '',
+                coordinates: currentGpsCoords ? [currentGpsCoords.lng, currentGpsCoords.lat] : [],
+              });
+              setAddressFormVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
+
+    if (!cartServiceability.isServiceable) {
+      const msg = cartServiceability.reason || 'Restaurant is too far: Customer selected address pincode and restaurant pincode are not in the same serviceable area list pincode.';
+      setError(msg);
+      showTooFarPopup(cartServiceability);
       return;
     }
     setError('');
@@ -1706,11 +1887,107 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
   }
 
   async function placeOrder() {
+    if (!cart.length) return;
+
+    // Check if current location pincode is not in the serviceable area list pincode
+    if (!hasSelectedAddress || !session) {
+      const locCheck = checkCurrentLocationServiceability();
+      if (!locCheck.isServiceable) {
+        const msg = locCheck.reason || `Your location is out of serviceable area. Current location pincode (${currentGpsPincode || 'N/A'}) is not in the serviceable area list pincode.`;
+        setError(msg);
+        Alert.alert(
+          'Location Out of Serviceable Area',
+          `${msg}\n\nPayment is not allowed before updating your location to a serviceable area.`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+    }
+
+    // Check if customer is attempting payment before login
+    if (!session) {
+      const loginMsg = 'Please login first before making payment.';
+      setError(loginMsg);
+      Alert.alert(
+        'Please login first',
+        'You must sign in to your Tomato account to proceed with payment and complete your order.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Sign in / Register',
+            style: 'default',
+            onPress: () => {
+              if (onRequestSignIn) {
+                onRequestSignIn();
+              }
+            },
+          },
+        ]
+      );
+      return;
+    }
+
+    // Check if delivery address is not set
+    if (!currentAddress || selectedAddressId === 'current_location' || !addresses.length) {
+      const addrMsg = 'Please add a delivery address before making payment.';
+      setError(addrMsg);
+      Alert.alert(
+        'Delivery Address Required',
+        'Your delivery address is not set. Please add a delivery address to complete your order. Note: The address must follow the rule of our serviceable area list pincodes.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Add Address',
+            style: 'default',
+            onPress: () => {
+              setTab('addresses');
+              setEditingAddressId('');
+              setAddressForm({
+                label: 'Home',
+                line1: '',
+                line2: '',
+                locality: currentGpsCity || '',
+                city: currentGpsCity || '',
+                state: '',
+                postalCode: currentGpsPincode || '',
+                phone: session?.user?.phone || '',
+                digipin: session?.user?.digipin || '',
+                coordinates: currentGpsCoords ? [currentGpsCoords.lng, currentGpsCoords.lat] : [],
+              });
+              setAddressFormVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
+
+    if (!cartServiceability.isServiceable) {
+      const msg = cartServiceability.reason || 'Restaurant is too far: Customer selected address pincode and restaurant pincode are not in the same serviceable area list pincode.';
+      setError(msg);
+      showTooFarPopup(cartServiceability);
+      return;
+    }
+    if (selectedPaymentMethod === 'cod') {
+      const txn = `COD_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      await completeOrderWithPayment({
+        paymentMethod: 'cod',
+        paymentStatus: 'pending',
+        paymentTransactionId: txn,
+      });
+      return;
+    }
     startPaymentFlow();
   }
 
   async function completeOrderWithPayment(paymentDetails: PaymentSuccessDetails) {
-    if (!cart.length || !currentAddress) return;
+    if (!cart.length || !currentAddress || !session?.token) return;
+    if (!cartServiceability.isServiceable) {
+      const msg = cartServiceability.reason || 'Restaurant is too far: Customer selected address pincode and restaurant pincode are not in the same serviceable area list pincode.';
+      setError(msg);
+      showTooFarPopup(cartServiceability);
+      return;
+    }
 
     setPlacingOrder(true);
     setError('');
@@ -1752,7 +2029,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
             ...(validatedCouponCode ? { couponCodes: [validatedCouponCode] } : {}),
             addressId: currentAddress._id,
             ...(() => {
-              const resolvedCustDigipin = resolveCustomerDigipin(currentAddress) || normalizeDigipin(session.user.digipin);
+              const resolvedCustDigipin = resolveCustomerDigipin(currentAddress) || normalizeDigipin(session?.user?.digipin);
               const decodedCust = resolvedCustDigipin ? decodeDigipin(resolvedCustDigipin) : null;
               const targetCoords = decodedCust
                 ? [decodedCust.lng, decodedCust.lat]
@@ -1765,7 +2042,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                 digipin: resolvedCustDigipin || undefined,
                 deliveryAddress: {
                   label: currentAddress.label || 'Home',
-                  phone: currentAddress.phone || session.user.phone || '',
+                  phone: currentAddress.phone || session?.user?.phone || '',
                   line1: currentAddress.line1,
                   line2: currentAddress.line2 || '',
                   locality: currentAddress.locality || '',
@@ -1793,7 +2070,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
         return next;
       });
       setTab('orders');
-      await loadOrders();
+      void loadOrders();
       const paymentLabel = paymentDetails.paymentMethod === 'cod'
         ? 'Cash on delivery'
         : paymentDetails.paymentMethod === 'razorpay'
@@ -1831,7 +2108,9 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     let revokeError = '';
     setIsLoggingOut(true);
     try {
-      await apiRequest('/api/auth/logout', session.token, { method: 'POST' });
+      if (session?.token) {
+        await apiRequest('/api/auth/logout', session.token, { method: 'POST' });
+      }
     } catch (reason) {
       revokeError = getErrorMessage(reason);
     } finally {
@@ -1851,6 +2130,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
     <View style={styles.app}>
       <GlobalHeader
         session={session}
+        onRequestSignIn={onRequestSignIn}
         onBrandPress={() => {
           setTab('browse');
           setSelectedStoreId('');
@@ -1865,8 +2145,16 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
           if (tab !== 'browse') setTab('browse');
         }}
         searchPlaceholder="Search dishes, restaurants…"
-        addressText="Delivering to you"
-        pincode={defaultPostalCode}
+        addressText={
+          hasSelectedAddress
+            ? (currentAddress?.label || currentAddress?.locality || currentAddress?.city || 'Selected address')
+            : (currentGpsCity ? `Near ${currentGpsCity}` : 'Current Location')
+        }
+        pincode={
+          hasSelectedAddress
+            ? activeCustomerPincode
+            : (currentGpsPincode || 'GPS')
+        }
         onAddressPress={() => setAddressDropdownVisible(true)}
         onNotificationPress={() => void showNotifications()}
         hasUnreadNotifications={notifications.length > 0}
@@ -1895,88 +2183,12 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
         onSessionUserUpdate={onSessionUserUpdate}
       />
 
-      <Modal
-        animationType="fade"
-        onRequestClose={() => setNotificationsModalVisible(false)}
-        transparent
+      <CustomerNotificationsModal
         visible={notificationsModalVisible}
-      >
-        <Pressable
-          onPress={() => setNotificationsModalVisible(false)}
-          style={styles.notificationModalBackdrop}
-        >
-          <Pressable onPress={(e) => e.stopPropagation()} style={styles.notificationModalCard}>
-            <View style={styles.notificationModalHeader}>
-              <View style={styles.notificationTitleRow}>
-                <Text style={styles.notificationModalIcon}>🔔</Text>
-                <Text style={styles.notificationModalTitle}>Notifications & Updates</Text>
-                {notifications.length > 0 && (
-                  <View style={styles.notificationCountBadge}>
-                    <Text style={styles.notificationCountBadgeText}>{notifications.length}</Text>
-                  </View>
-                )}
-              </View>
-              <Pressable
-                accessibilityLabel="Close notifications"
-                onPress={() => setNotificationsModalVisible(false)}
-                style={styles.notificationModalClose}
-              >
-                <Text style={styles.notificationModalCloseText}>✕</Text>
-              </Pressable>
-            </View>
-
-            {loadingNotifications ? (
-              <View style={styles.notificationLoadingBox}>
-                <ActivityIndicator color="#d83a32" size="small" />
-                <Text style={styles.notificationLoadingText}>Loading updates…</Text>
-              </View>
-            ) : notifications.length > 0 ? (
-              <>
-                <ScrollView
-                  style={styles.notificationScrollView}
-                  contentContainerStyle={styles.notificationScrollContent}
-                  nestedScrollEnabled
-                  showsVerticalScrollIndicator={true}
-                >
-                  {notifications.map((item, index) => (
-                    <View
-                      key={`${item.createdAt || ''}-${index}`}
-                      style={[
-                        styles.notificationItem,
-                        index === notifications.length - 1 && styles.notificationItemLast,
-                      ]}
-                    >
-                      <View style={styles.notificationBullet} />
-                      <View style={styles.notificationBody}>
-                        <Text style={styles.notificationItemTitle}>
-                          {item.title || 'Tomato update'}
-                        </Text>
-                        <Text style={styles.notificationItemMessage}>
-                          {item.message || ''}
-                        </Text>
-                        {!!item.createdAt && (
-                          <Text style={styles.notificationItemTime}>
-                            {new Date(item.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })} · {new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </Text>
-                        )}
-                      </View>
-                    </View>
-                  ))}
-                </ScrollView>
-                {notifications.length > 3 && (
-                  <Text style={styles.notificationScrollHint}>
-                    ↕ Showing latest 3 · Scroll to view {notifications.length - 3} older update{notifications.length - 3 > 1 ? 's' : ''}
-                  </Text>
-                )}
-              </>
-            ) : (
-              <View style={styles.notificationEmptyBox}>
-                <Text style={styles.notificationEmptyText}>You are all caught up!</Text>
-              </View>
-            )}
-          </Pressable>
-        </Pressable>
-      </Modal>
+        onClose={() => setNotificationsModalVisible(false)}
+        notifications={notifications}
+        loading={loadingNotifications}
+      />
 
       <Modal
         animationType="slide"
@@ -2006,6 +2218,49 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
             </View>
 
             <ScrollView style={styles.dropdownAddressList} keyboardShouldPersistTaps="handled">
+              {/* Option to use Device GPS Location */}
+              <Pressable
+                disabled={isLocating}
+                onPress={async () => {
+                  setSelectedAddressId('current_location');
+                  setAddressDropdownVisible(false);
+                  await detectDeviceLocation(false);
+                }}
+                style={[
+                  styles.dropdownAddressCard,
+                  !hasSelectedAddress && styles.dropdownAddressCardSelected,
+                  { borderColor: !hasSelectedAddress ? '#d83a32' : '#bbf7d0', backgroundColor: !hasSelectedAddress ? '#fff8f4' : '#f0fdf4' },
+                ]}
+              >
+                <View style={styles.dropdownAddressRadio}>
+                  {isLocating ? (
+                    <ActivityIndicator color="#d83a32" size="small" />
+                  ) : (
+                    <Text style={[styles.dropdownRadioText, !hasSelectedAddress && styles.dropdownRadioTextSelected]}>
+                      {!hasSelectedAddress ? '●' : '○'}
+                    </Text>
+                  )}
+                </View>
+                <View style={styles.flex}>
+                  <View style={styles.dropdownAddressTitleRow}>
+                    <Text style={[styles.dropdownAddressLabel, { color: '#166534' }]}>📍 Current Location (GPS)</Text>
+                    {!hasSelectedAddress && <Text style={styles.selectedAreaBadge}>ACTIVE</Text>}
+                  </View>
+                  <Text style={styles.dropdownAddressText}>
+                    {currentGpsCoords
+                      ? `Lat: ${currentGpsCoords.lat.toFixed(4)}, Lng: ${currentGpsCoords.lng.toFixed(4)}${currentGpsCity ? ` · ${currentGpsCity}` : ''}`
+                      : 'Tap to detect device GPS and browse nearest stores'}
+                  </Text>
+                  {!!currentGpsPincode && (
+                    <View style={styles.dropdownAddressMetaRow}>
+                      <Text style={[styles.dropdownPincodeBadge, { backgroundColor: '#dcfce7', color: '#15803d' }]}>
+                        Detected PIN: {currentGpsPincode}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </Pressable>
+
               {addresses.map((address) => {
                 const isCurrent = currentAddress?._id === address._id;
                 const isBusy = settingDefaultId === address._id;
@@ -2072,8 +2327,8 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                     city: '',
                     state: '',
                     postalCode: '',
-                    phone: session.user.phone || '',
-                    digipin: session.user.digipin || '',
+                    phone: session?.user?.phone || '',
+                    digipin: session?.user?.digipin || '',
                     coordinates: [],
                   });
                   setAddressFormVisible(true);
@@ -2384,13 +2639,19 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                     ? `No ${mode === 'shop' ? 'shops' : 'restaurants'} matching "${search}"`
                     : selectedCategory
                       ? `No ${mode === 'shop' ? 'shops' : 'restaurants'} found for "${selectedCategory}"`
-                      : `No ${mode === 'shop' ? 'shops' : 'restaurants'} available`
+                      : hasSelectedAddress
+                        ? `No ${mode === 'shop' ? 'shops' : 'restaurants'} in PIN ${activeCustomerPincode}`
+                        : `No ${mode === 'shop' ? 'shops' : 'restaurants'} near you`
                 }
                 detail={
                   search || selectedCategory
                     ? 'Try another category or tap Clear filter.'
-                    : 'Pull down to refresh, or check that your delivery area is serviceable.'
+                    : hasSelectedAddress
+                      ? `There are no active ${mode === 'shop' ? 'shops' : 'restaurants'} covering your selected pincode (${activeCustomerPincode}). Tap Change above to choose another address or use current GPS location.`
+                      : 'No open stores detected near your GPS location. Tap Change above to select a delivery address.'
                 }
+                actionLabel="Change location"
+                onAction={() => setAddressDropdownVisible(true)}
               />
             )}
             <View style={styles.sectionHeadingRow}>
@@ -2445,6 +2706,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                       storeName={storeDisplayName}
                       onPressStore={itemStore ? () => setSelectedStoreId(storeId(itemStore)) : undefined}
                       onAdd={(variant) => addItem(item, variant)}
+                      isShop={Boolean(mode === 'shop' || (itemStore as any)?.type === 'shop' || (itemStore as any)?.isShop || Boolean(itemStore?.shopAddress))}
                     />
                   );
                 })}
@@ -2494,25 +2756,88 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                     />
                   </View>
                 ))}
+                {!cartServiceability.isServiceable && (
+                  <View style={styles.tooFarBanner}>
+                    <View style={styles.tooFarHeader}>
+                      <Text style={styles.tooFarIcon}>🚫</Text>
+                      <Text style={styles.tooFarTitle}>Restaurant is too far</Text>
+                    </View>
+                    <Text style={styles.tooFarText}>
+                      Customer selected address pincode <Text style={styles.tooFarBold}>({cartServiceability.custPin || 'N/A'})</Text> and restaurant pincode <Text style={styles.tooFarBold}>({cartServiceability.storePin || 'N/A'})</Text> are not in the same serviceable area list pincode.
+                    </Text>
+                    <Text style={styles.tooFarSubtext}>
+                      Delivery cannot be fulfilled for this distance. Payment is blocked until you update your delivery address to a serviceable location.
+                    </Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        setTab('addresses');
+                        setAddressFormVisible(true);
+                      }}
+                      style={styles.tooFarUpdateBtn}
+                    >
+                      <Text style={styles.tooFarUpdateBtnText}>📍 Update Address & Pincode</Text>
+                    </Pressable>
+                  </View>
+                )}
                 <Text style={styles.sectionTitle}>Deliver to</Text>
                 {addresses.length ? (
-                  addresses.map((address) => (
-                    <Pressable
-                      key={address._id}
-                      onPress={() => setSelectedAddressId(address._id)}
-                      style={[
-                        styles.addressOption,
-                        (selectedAddressId === address._id || currentAddress?._id === address._id)
-                          && styles.addressOptionSelected,
-                      ]}
-                    >
-                      <Text style={styles.radio}>{selectedAddressId === address._id || currentAddress?._id === address._id ? '●' : '○'}</Text>
-                      <View style={styles.flex}>
-                        <Text style={styles.itemName}>{address.label || 'Delivery address'}</Text>
-                        <Text style={styles.itemDescription}>{addressSummary(address)}</Text>
-                      </View>
-                    </Pressable>
-                  ))
+                  addresses.map((address) => {
+                    const addrPin = getAddressPincode(address);
+                    const isAddrServiceable = checkServiceAreaMatch({
+                      custPin: addrPin,
+                      storePin: cartStorePin,
+                      serviceAreas,
+                      isStoreServiceable: cartStore?.isServiceable,
+                      areaMessage,
+                    }).isServiceable;
+
+                    return (
+                      <Pressable
+                        key={address._id}
+                        onPress={() => {
+                          setSelectedAddressId(address._id);
+                          const testCheck = checkServiceAreaMatch({
+                            custPin: addrPin,
+                            storePin: cartStorePin,
+                            serviceAreas,
+                            isStoreServiceable: cartStore?.isServiceable,
+                            areaMessage,
+                          });
+                          if (!testCheck.isServiceable) {
+                            showTooFarPopup(testCheck);
+                          }
+                        }}
+                        style={[
+                          styles.addressOption,
+                          (selectedAddressId === address._id || currentAddress?._id === address._id)
+                            && styles.addressOptionSelected,
+                          !isAddrServiceable && styles.addressOptionUnserviceable,
+                        ]}
+                      >
+                        <Text style={styles.radio}>{selectedAddressId === address._id || currentAddress?._id === address._id ? '●' : '○'}</Text>
+                        <View style={styles.flex}>
+                          <View style={styles.addressNameRow}>
+                            <Text style={styles.itemName}>{address.label || 'Delivery address'}</Text>
+                            {!isAddrServiceable ? (
+                              <View style={styles.addressUnserviceableBadge}>
+                                <Text style={styles.addressUnserviceableText}>
+                                  🚫 Outside area ({addrPin || 'No PIN'})
+                                </Text>
+                              </View>
+                            ) : (
+                              <View style={styles.addressServiceableBadge}>
+                                <Text style={styles.addressServiceableText}>
+                                  ✓ Serviceable ({addrPin})
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                          <Text style={styles.itemDescription}>{addressSummary(address)}</Text>
+                        </View>
+                      </Pressable>
+                    );
+                  })
                 ) : (
                   <EmptyState
                     title="Add a delivery address"
@@ -2524,58 +2849,122 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                     }}
                   />
                 )}
+                {/* Apply a coupon Dropdown (Contracted by default) */}
                 <View style={styles.couponCard}>
-                  <Text style={styles.sectionTitle}>Apply a coupon</Text>
-                  <View style={styles.inputRow}>
-                    <TextInput
-                      autoCapitalize="characters"
-                      onChangeText={(value) => {
-                        setCouponCode(value);
-                        setCouponValidation(null);
-                      }}
-                      placeholder="Enter coupon code"
-                      placeholderTextColor="#998f88"
-                      style={[styles.input, styles.halfInput]}
-                      value={couponCode}
-                    />
-                    <PrimaryButton
-                      disabled={validatingCoupon || !cart.length}
-                      label={validatingCoupon ? 'Checking…' : 'Apply'}
-                      onPress={() => void validateCoupon()}
-                    />
-                  </View>
-                  {!!couponValidation?.valid && (
-                    <Text style={styles.couponSuccess}>
-                      {couponValidation.appliedCoupons?.[0]?.title || couponCode} applied · Save {formatRupees(couponDiscount)}
-                    </Text>
-                  )}
-                  {!!couponValidation && !couponValidation.valid && (
-                    <Text style={styles.couponError}>
-                      {couponValidation.message || couponValidation.rejectedCoupons?.map((entry) => entry.reason).join(' · ') || 'Coupon could not be applied.'}
-                    </Text>
-                  )}
-                  {!!availableCoupons.length && (
-                    <>
-                      <Text style={styles.couponListTitle}>Available coupons</Text>
-                      {availableCoupons.slice(0, 5).map((coupon) => (
-                        <Pressable key={coupon.code} style={styles.couponRow} onPress={() => {
-                          setCouponCode(coupon.code);
-                          void validateCoupon(coupon.code);
-                        }}>
-                          <View style={styles.flex}>
-                            <Text style={styles.couponCode}>{coupon.code}</Text>
-                            <Text style={styles.itemDescription}>{coupon.title || coupon.description || 'Tap to apply'}</Text>
-                          </View>
-                          <Text style={styles.link}>Use</Text>
-                        </Pressable>
-                      ))}
-                    </>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Toggle apply a coupon section"
+                    onPress={() => setCouponDropdownExpanded((prev) => !prev)}
+                    style={styles.collapsibleHeaderRow}
+                  >
+                    <View style={styles.collapsibleHeaderLeft}>
+                      <Text style={styles.collapsibleHeaderIcon}>🏷️</Text>
+                      <Text style={[styles.sectionTitle, { marginTop: 0, marginBottom: 0 }]}>Apply a coupon</Text>
+                      {couponValidation?.valid && (
+                        <View style={styles.couponAppliedBadge}>
+                          <Text style={styles.couponAppliedBadgeText}>✓ Applied</Text>
+                        </View>
+                      )}
+                    </View>
+                    <View style={styles.collapsibleHeaderRight}>
+                      {couponValidation?.valid ? (
+                        <Text style={styles.couponAppliedDiscount}>-{formatRupees(couponDiscount)}</Text>
+                      ) : !couponDropdownExpanded ? (
+                        <Text style={styles.collapsibleActionText}>Add coupon</Text>
+                      ) : null}
+                      <Text style={styles.dropdownChevron}>{couponDropdownExpanded ? '▴' : '▾'}</Text>
+                    </View>
+                  </Pressable>
+
+                  {couponDropdownExpanded && (
+                    <View style={styles.collapsibleContent}>
+                      <View style={styles.inputRow}>
+                        <TextInput
+                          autoCapitalize="characters"
+                          onChangeText={(value) => {
+                            setCouponCode(value);
+                            setCouponValidation(null);
+                          }}
+                          placeholder="Enter coupon code"
+                          placeholderTextColor="#998f88"
+                          style={[styles.input, styles.halfInput]}
+                          value={couponCode}
+                        />
+                        <PrimaryButton
+                          disabled={validatingCoupon || !cart.length}
+                          label={validatingCoupon ? 'Checking…' : 'Apply'}
+                          onPress={() => void validateCoupon()}
+                        />
+                      </View>
+                      {!!couponValidation?.valid && (
+                        <Text style={styles.couponSuccess}>
+                          {couponValidation.appliedCoupons?.[0]?.title || couponCode} applied · Save {formatRupees(couponDiscount)}
+                        </Text>
+                      )}
+                      {!!couponValidation && !couponValidation.valid && (
+                        <Text style={styles.couponError}>
+                          {couponValidation.message || couponValidation.rejectedCoupons?.map((entry) => entry.reason).join(' · ') || 'Coupon could not be applied.'}
+                        </Text>
+                      )}
+                      {!!availableCoupons.length && (
+                        <>
+                          <Text style={styles.couponListTitle}>Available coupons</Text>
+                          {availableCoupons.slice(0, 5).map((coupon) => (
+                            <Pressable key={coupon.code} style={styles.couponRow} onPress={() => {
+                              setCouponCode(coupon.code);
+                              void validateCoupon(coupon.code);
+                            }}>
+                              <View style={styles.flex}>
+                                <Text style={styles.couponCode}>{coupon.code}</Text>
+                                <Text style={styles.itemDescription}>{coupon.title || coupon.description || 'Tap to apply'}</Text>
+                              </View>
+                              <Text style={styles.link}>Use</Text>
+                            </Pressable>
+                          ))}
+                        </>
+                      )}
+                    </View>
                   )}
                 </View>
 
+                {/* Payment mode Dropdown (Default expanded, collapsible by user) */}
                 <View style={styles.paymentCard}>
-                  <Text style={styles.sectionTitle}>Payment mode</Text>
-                  <Text style={styles.paymentSubtitle}>Choose how you want to pay</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Toggle payment mode section"
+                    onPress={() => setPaymentDropdownExpanded((prev) => !prev)}
+                    style={styles.collapsibleHeaderRow}
+                  >
+                    <View style={styles.collapsibleHeaderLeft}>
+                      <Text style={styles.collapsibleHeaderIcon}>💳</Text>
+                      <View>
+                        <Text style={[styles.sectionTitle, { marginTop: 0, marginBottom: 0 }]}>Payment mode</Text>
+                        {!paymentDropdownExpanded && (
+                          <Text style={styles.paymentSelectedSummary}>
+                            {selectedPaymentMethod === 'cod'
+                              ? '💵 Cash on Delivery'
+                              : selectedPaymentMethod === 'razorpay'
+                                ? '⚡ Razorpay'
+                                : selectedPaymentMethod === 'upi'
+                                  ? '📱 UPI Payment'
+                                  : selectedPaymentMethod === 'card'
+                                    ? '💳 Credit/Debit Card'
+                                    : `🏦 Net Banking (${selectedBank})`}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                    <View style={styles.collapsibleHeaderRight}>
+                      {paymentDropdownExpanded && (
+                        <Text style={styles.collapsibleActionText}>Collapse</Text>
+                      )}
+                      <Text style={styles.dropdownChevron}>{paymentDropdownExpanded ? '▴' : '▾'}</Text>
+                    </View>
+                  </Pressable>
+
+                  {paymentDropdownExpanded && (
+                    <View style={styles.collapsibleContent}>
+                      <Text style={styles.paymentSubtitle}>Choose how you want to pay</Text>
 
                   {PAYMENT_MODES.map((mode) => {
                     const isSelected = selectedPaymentMethod === mode.id;
@@ -2682,6 +3071,8 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                       </View>
                     </View>
                   )}
+                    </View>
+                  )}
                 </View>
 
                 <View style={styles.billCard}>
@@ -2701,23 +3092,63 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                           : `Net Banking (${selectedBank}) · Instant prepaid order`}
                   </Text>
                 </View>
-                <PrimaryButton
-                  disabled={placingOrder || !addresses.length}
-                  label={
-                    placingOrder
-                      ? 'Placing order…'
-                      : selectedPaymentMethod === 'razorpay'
-                        ? `Pay with Razorpay · ${formatRupees(estimatedTotal)}`
-                        : selectedPaymentMethod === 'cod'
-                          ? `Place cash order · ${formatRupees(estimatedTotal)}`
-                          : selectedPaymentMethod === 'upi'
-                            ? `Pay via UPI · ${formatRupees(estimatedTotal)}`
-                            : selectedPaymentMethod === 'card'
-                              ? `Pay with Card · ${formatRupees(estimatedTotal)}`
-                              : `Pay via Net Banking · ${formatRupees(estimatedTotal)}`
-                  }
-                  onPress={() => void placeOrder()}
-                />
+                {!session ? (
+                  <View style={[styles.paymentBlockedWarning, { backgroundColor: '#fff7ed', borderColor: '#fed7aa' }]}>
+                    <Text style={[styles.paymentBlockedText, { color: '#c2410c' }]}>
+                      👤 You are browsing as a guest. Please sign in to place your order and make payment.
+                    </Text>
+                  </View>
+                ) : (!addresses.length || !currentAddress || selectedAddressId === 'current_location') ? (
+                  <View style={[styles.paymentBlockedWarning, { backgroundColor: '#fff7ed', borderColor: '#fed7aa' }]}>
+                    <Text style={[styles.paymentBlockedText, { color: '#c2410c' }]}>
+                      📍 Delivery address not set. Please add a delivery address within our serviceable areas to place order.
+                    </Text>
+                  </View>
+                ) : !cartServiceability.isServiceable ? (
+                  <View style={styles.paymentBlockedWarning}>
+                    <Text style={styles.paymentBlockedText}>
+                      🚫 Payment disabled: Delivery address pincode ({cartServiceability.custPin || 'N/A'}) and restaurant pincode ({cartServiceability.storePin || 'N/A'}) are not in the same serviceable area list pincode.
+                    </Text>
+                  </View>
+                ) : null}
+                <Pressable
+                  onPress={() => {
+                    if (session && currentAddress && !cartServiceability.isServiceable) {
+                      showTooFarPopup(cartServiceability);
+                    }
+                  }}
+                >
+                  <PrimaryButton
+                    disabled={
+                      placingOrder ||
+                      Boolean(session && currentAddress && !cartServiceability.isServiceable)
+                    }
+                    label={
+                      !session
+                        ? (!checkCurrentLocationServiceability().isServiceable
+                            ? 'Location out of serviceable area'
+                            : `Sign in to place order · ${formatRupees(estimatedTotal)}`)
+                        : (!addresses.length || !currentAddress || selectedAddressId === 'current_location')
+                          ? 'Add delivery address to place order'
+                          : !cartServiceability.isServiceable
+                            ? 'Restaurant is too far · Update address to pay'
+                            : placingOrder
+                              ? 'Placing order…'
+                              : selectedPaymentMethod === 'razorpay'
+                                ? `Pay with Razorpay · ${formatRupees(estimatedTotal)}`
+                                : selectedPaymentMethod === 'cod'
+                                  ? `Place cash order · ${formatRupees(estimatedTotal)}`
+                                  : selectedPaymentMethod === 'upi'
+                                    ? `Pay via UPI · ${formatRupees(estimatedTotal)}`
+                                    : selectedPaymentMethod === 'card'
+                                      ? `Pay with Card · ${formatRupees(estimatedTotal)}`
+                                      : `Pay via Net Banking · ${formatRupees(estimatedTotal)}`
+                    }
+                    onPress={() => {
+                      void placeOrder();
+                    }}
+                  />
+                </Pressable>
                 {placingOrder && <ActivityIndicator color="#d83a32" style={styles.buttonSpinner} />}
               </>
             )}
@@ -2735,16 +3166,24 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                 <Text style={styles.refreshText}>Refresh</Text>
               </Pressable>
             </View>
-            {orders.length ? orders.map((order) => (
-              <OrderCard
-                key={order._id}
-                order={order}
-                tracking={trackingByOrder[order._id]}
-                trackingError={trackingErrors[order._id]}
-                trackingLoading={trackingBusyId === order._id}
-                bill={bills[order._id]}
-                billLoading={billBusyId === order._id}
-                sessionToken={session.token}
+            {!session ? (
+              <EmptyState
+                title="Please sign in"
+                detail="Sign in to view and track your orders."
+                actionLabel="Sign in / Register"
+                onAction={() => (onRequestSignIn ? onRequestSignIn() : onSignOut())}
+              />
+            ) : orders.length ? (
+              orders.map((order) => (
+                <OrderCard
+                  key={order._id}
+                  order={order}
+                  tracking={trackingByOrder[order._id]}
+                  trackingError={trackingErrors[order._id]}
+                  trackingLoading={trackingBusyId === order._id}
+                  bill={bills[order._id]}
+                  billLoading={billBusyId === order._id}
+                  sessionToken={session?.token || ''}
                 onTrack={() => void loadTracking(order._id)}
                 onViewBill={() => void loadBill(order._id)}
                 onReview={(item) => {
@@ -2764,7 +3203,7 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
                   setReviewComment('');
                 }}
               />
-            )) : (
+            ))) : (
               <EmptyState
                 title="No orders yet"
                 detail="Your order history and delivery updates will appear here."
@@ -2870,170 +3309,181 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
             <Text style={styles.eyebrow}>DELIVERY DETAILS</Text>
             <Text style={styles.pageTitle}>Saved addresses</Text>
             <Text style={styles.pageSubtitle}>Choose where your order should arrive.</Text>
-            {addresses.map((address) => (
-              <View key={address._id} style={styles.addressCard}>
-                <View style={styles.addressTitleRow}>
-                  <Text style={styles.itemName}>{address.label || 'Delivery address'}</Text>
-                  {address.isDefault && <Text style={styles.defaultBadge}>DEFAULT</Text>}
-                </View>
-                <Text style={styles.addressText}>{addressSummary(address)}</Text>
-                {!!address.digipin && (
-                  <View style={styles.digipinPill}>
-                    <Text style={styles.digipinPillText}>⌖ DIGIPIN: {formatDigipin(address.digipin)}</Text>
-                  </View>
-                )}
-                {Array.isArray(address.coordinates) && address.coordinates.length === 2 && (
-                  <View style={styles.gpsRow}>
-                    <Text style={styles.gpsPillText}>📍 Live GPS: {address.coordinates[1].toFixed(5)}, {address.coordinates[0].toFixed(5)}</Text>
-                  </View>
-                )}
-                {!!address.phone && <Text style={styles.itemDescription}>{address.phone}</Text>}
-                <View style={styles.addressActions}>
-                  {!address.isDefault && (
-                    <Pressable onPress={() => void setDefaultAddress(address._id)}>
-                      <Text style={styles.link}>Set as default</Text>
-                    </Pressable>
-                  )}
-                  <Pressable onPress={() => deleteAddress(address)}>
-                    <Text style={styles.removeLink}>Remove</Text>
-                  </Pressable>
-                  <Pressable onPress={() => editAddress(address)}>
-                    <Text style={styles.link}>Edit</Text>
-                  </Pressable>
-                </View>
-              </View>
-            ))}
-            {!addresses.length && !addressFormVisible && (
-              <EmptyState title="No saved addresses" detail="Add an address so Tomato knows where to deliver." />
-            )}
-            {addressFormVisible ? (
-              <View style={styles.formCard}>
-                <Text style={styles.sectionTitle}>{editingAddressId ? 'Edit delivery address' : 'New delivery address'}</Text>
-                <TextInput
-                  onChangeText={(value) => setAddressForm((form) => ({ ...form, label: value }))}
-                  placeholder="Label (Home, Work…)"
-                  style={styles.input}
-                  value={addressForm.label}
-                />
-                <TextInput
-                  onChangeText={(value) => setAddressForm((form) => ({ ...form, line1: value }))}
-                  placeholder="House / street address *"
-                  style={styles.input}
-                  value={addressForm.line1}
-                />
-                <TextInput
-                  onChangeText={(value) => setAddressForm((form) => ({ ...form, line2: value }))}
-                  placeholder="Apartment, suite (optional)"
-                  style={styles.input}
-                  value={addressForm.line2}
-                />
-                <TextInput
-                  onChangeText={(value) => setAddressForm((form) => ({ ...form, locality: value }))}
-                  placeholder="Area / locality"
-                  style={styles.input}
-                  value={addressForm.locality}
-                />
-                <View style={styles.inputRow}>
-                  <TextInput
-                    onChangeText={(value) => setAddressForm((form) => ({ ...form, city: value }))}
-                    placeholder="City *"
-                    style={[styles.input, styles.halfInput]}
-                    value={addressForm.city}
-                  />
-                  <TextInput
-                    onChangeText={(value) => setAddressForm((form) => ({ ...form, state: value }))}
-                    placeholder="State"
-                    style={[styles.input, styles.halfInput]}
-                    value={addressForm.state}
-                  />
-                </View>
-                <View style={styles.inputRow}>
-                  <TextInput
-                    keyboardType="number-pad"
-                    maxLength={6}
-                    onChangeText={(value) => setAddressForm((form) => ({ ...form, postalCode: value }))}
-                    placeholder="Postal code *"
-                    style={[styles.input, styles.halfInput]}
-                    value={addressForm.postalCode}
-                  />
-                  <TextInput
-                    keyboardType="phone-pad"
-                    onChangeText={(value) => setAddressForm((form) => ({ ...form, phone: value }))}
-                    placeholder="Phone"
-                    style={[styles.input, styles.halfInput]}
-                    value={addressForm.phone}
-                  />
-                </View>
-                <TextInput
-                  autoCapitalize="characters"
-                  onChangeText={(value) => setAddressForm((form) => ({ ...form, digipin: value.toUpperCase() }))}
-                  placeholder="Delivery DIGIPIN (e.g. 4M8-9K2-T3P9)"
-                  style={styles.input}
-                  value={addressForm.digipin}
-                />
-                <View style={styles.addressDigipinActionRow}>
-                  <Pressable
-                    onPress={() => void openMapplsMap(addressForm.digipin)}
-                    style={styles.addressMapplsBtn}
-                  >
-                    <Text style={styles.addressMapplsBtnText}>🗺️ Find DIGIPIN on Mappls</Text>
-                  </Pressable>
-                  <Pressable
-                    disabled={detectingGps}
-                    onPress={() => void detectCurrentGpsLocation()}
-                    style={styles.addressGpsDetectBtn}
-                  >
-                    <Text style={styles.addressGpsDetectBtnText}>
-                      {detectingGps ? '📍 Detecting GPS…' : '📍 Set Current GPS'}
-                    </Text>
-                  </Pressable>
-                </View>
-                {Array.isArray(addressForm.coordinates) && addressForm.coordinates.length === 2 && (
-                  <View style={styles.gpsLocationActiveBadge}>
-                    <Text style={styles.gpsLocationActiveText}>
-                      📍 Current GPS Location Set: {addressForm.coordinates[1].toFixed(5)}, {addressForm.coordinates[0].toFixed(5)}
-                    </Text>
-                  </View>
-                )}
-                <Text style={styles.fieldHint}>
-                  {addressForm.digipin
-                    ? '✓ DIGIPIN is set. Your delivery rider will navigate via this DIGIPIN.'
-                    : addressForm.coordinates?.length === 2
-                      ? '✓ GPS location set. Since DIGIPIN is not set, rider will navigate using this GPS location.'
-                      : 'Tip: You can set a DIGIPIN or your current device GPS location for delivery.'}
-                </Text>
-                <PrimaryButton
-                  disabled={savingAddress}
-                  label={savingAddress ? 'Saving…' : editingAddressId ? 'Save changes' : 'Save address'}
-                  onPress={() => void saveAddress()}
-                />
-                <Pressable onPress={() => {
-                  setAddressFormVisible(false);
-                  setEditingAddressId('');
-                }} style={styles.cancelButton}>
-                  <Text style={styles.cancelText}>Cancel</Text>
-                </Pressable>
-              </View>
-            ) : (
-              <PrimaryButton
-                label="+ Add a new address"
-                onPress={() => {
-                  setEditingAddressId('');
-                  setAddressForm({
-                    label: 'Home',
-                    line1: '',
-                    line2: '',
-                    locality: '',
-                    city: '',
-                    state: '',
-                    postalCode: '',
-                    phone: session.user.phone || '',
-                    digipin: session.user.digipin || '',
-                    coordinates: [],
-                  });
-                  setAddressFormVisible(true);
-                }}
+            {!session ? (
+              <EmptyState
+                title="Sign in to save addresses"
+                detail="Please sign in or register to view, manage, and save your delivery addresses."
+                actionLabel="Sign in / Register"
+                onAction={() => (onRequestSignIn ? onRequestSignIn() : Alert.alert('Sign in', 'Please sign in to manage your addresses.'))}
               />
+            ) : (
+              <>
+                {addresses.map((address) => (
+                  <View key={address._id} style={styles.addressCard}>
+                    <View style={styles.addressTitleRow}>
+                      <Text style={styles.itemName}>{address.label || 'Delivery address'}</Text>
+                      {address.isDefault && <Text style={styles.defaultBadge}>DEFAULT</Text>}
+                    </View>
+                    <Text style={styles.addressText}>{addressSummary(address)}</Text>
+                    {!!address.digipin && (
+                      <View style={styles.digipinPill}>
+                        <Text style={styles.digipinPillText}>⌖ DIGIPIN: {formatDigipin(address.digipin)}</Text>
+                      </View>
+                    )}
+                    {Array.isArray(address.coordinates) && address.coordinates.length === 2 && (
+                      <View style={styles.gpsRow}>
+                        <Text style={styles.gpsPillText}>📍 Live GPS: {address.coordinates[1].toFixed(5)}, {address.coordinates[0].toFixed(5)}</Text>
+                      </View>
+                    )}
+                    {!!address.phone && <Text style={styles.itemDescription}>{address.phone}</Text>}
+                    <View style={styles.addressActions}>
+                      {!address.isDefault && (
+                        <Pressable onPress={() => void setDefaultAddress(address._id)}>
+                          <Text style={styles.link}>Set as default</Text>
+                        </Pressable>
+                      )}
+                      <Pressable onPress={() => deleteAddress(address)}>
+                        <Text style={styles.removeLink}>Remove</Text>
+                      </Pressable>
+                      <Pressable onPress={() => editAddress(address)}>
+                        <Text style={styles.link}>Edit</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ))}
+                {!addresses.length && !addressFormVisible && (
+                  <EmptyState title="No saved addresses" detail="Add an address so Tomato knows where to deliver." />
+                )}
+                {addressFormVisible ? (
+                  <View style={styles.formCard}>
+                    <Text style={styles.sectionTitle}>{editingAddressId ? 'Edit delivery address' : 'New delivery address'}</Text>
+                    <TextInput
+                      onChangeText={(value) => setAddressForm((form) => ({ ...form, label: value }))}
+                      placeholder="Label (Home, Work…)"
+                      style={styles.input}
+                      value={addressForm.label}
+                    />
+                    <TextInput
+                      onChangeText={(value) => setAddressForm((form) => ({ ...form, line1: value }))}
+                      placeholder="House / street address *"
+                      style={styles.input}
+                      value={addressForm.line1}
+                    />
+                    <TextInput
+                      onChangeText={(value) => setAddressForm((form) => ({ ...form, line2: value }))}
+                      placeholder="Apartment, suite (optional)"
+                      style={styles.input}
+                      value={addressForm.line2}
+                    />
+                    <TextInput
+                      onChangeText={(value) => setAddressForm((form) => ({ ...form, locality: value }))}
+                      placeholder="Area / locality"
+                      style={styles.input}
+                      value={addressForm.locality}
+                    />
+                    <View style={styles.inputRow}>
+                      <TextInput
+                        onChangeText={(value) => setAddressForm((form) => ({ ...form, city: value }))}
+                        placeholder="City *"
+                        style={[styles.input, styles.halfInput]}
+                        value={addressForm.city}
+                      />
+                      <TextInput
+                        onChangeText={(value) => setAddressForm((form) => ({ ...form, state: value }))}
+                        placeholder="State"
+                        style={[styles.input, styles.halfInput]}
+                        value={addressForm.state}
+                      />
+                    </View>
+                    <View style={styles.inputRow}>
+                      <TextInput
+                        keyboardType="number-pad"
+                        maxLength={6}
+                        onChangeText={(value) => setAddressForm((form) => ({ ...form, postalCode: value }))}
+                        placeholder="Postal code *"
+                        style={[styles.input, styles.halfInput]}
+                        value={addressForm.postalCode}
+                      />
+                      <TextInput
+                        keyboardType="phone-pad"
+                        onChangeText={(value) => setAddressForm((form) => ({ ...form, phone: value }))}
+                        placeholder="Phone"
+                        style={[styles.input, styles.halfInput]}
+                        value={addressForm.phone}
+                      />
+                    </View>
+                    <TextInput
+                      autoCapitalize="characters"
+                      onChangeText={(value) => setAddressForm((form) => ({ ...form, digipin: value.toUpperCase() }))}
+                      placeholder="Delivery DIGIPIN (e.g. 4M8-9K2-T3P9)"
+                      style={styles.input}
+                      value={addressForm.digipin}
+                    />
+                    <View style={styles.addressDigipinActionRow}>
+                      <Pressable
+                        onPress={() => void openMapplsMap(addressForm.digipin)}
+                        style={styles.addressMapplsBtn}
+                      >
+                        <Text style={styles.addressMapplsBtnText}>🗺️ Find DIGIPIN on Mappls</Text>
+                      </Pressable>
+                      <Pressable
+                        disabled={detectingGps}
+                        onPress={() => void detectCurrentGpsLocation()}
+                        style={styles.addressGpsDetectBtn}
+                      >
+                        <Text style={styles.addressGpsDetectBtnText}>
+                          {detectingGps ? '📍 Detecting GPS…' : '📍 Set Current GPS'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                    {Array.isArray(addressForm.coordinates) && addressForm.coordinates.length === 2 && (
+                      <View style={styles.gpsLocationActiveBadge}>
+                        <Text style={styles.gpsLocationActiveText}>
+                          📍 Current GPS Location Set: {addressForm.coordinates[1].toFixed(5)}, {addressForm.coordinates[0].toFixed(5)}
+                        </Text>
+                      </View>
+                    )}
+                    <Text style={styles.fieldHint}>
+                      {addressForm.digipin
+                        ? '✓ DIGIPIN is set. Your delivery rider will navigate via this DIGIPIN.'
+                        : addressForm.coordinates?.length === 2
+                          ? '✓ GPS location set. Since DIGIPIN is not set, rider will navigate using this GPS location.'
+                          : 'Tip: You can set a DIGIPIN or your current device GPS location for delivery.'}
+                    </Text>
+                    <PrimaryButton
+                      disabled={savingAddress}
+                      label={savingAddress ? 'Saving…' : editingAddressId ? 'Save changes' : 'Save address'}
+                      onPress={() => void saveAddress()}
+                    />
+                    <Pressable onPress={() => {
+                      setAddressFormVisible(false);
+                      setEditingAddressId('');
+                    }} style={styles.cancelButton}>
+                      <Text style={styles.cancelText}>Cancel</Text>
+                    </Pressable>
+                  </View>
+                ) : (
+                  <PrimaryButton
+                    label="+ Add a new address"
+                    onPress={() => {
+                      setEditingAddressId('');
+                      setAddressForm({
+                        label: 'Home',
+                        line1: '',
+                        line2: '',
+                        locality: '',
+                        city: '',
+                        state: '',
+                        postalCode: '',
+                        phone: session?.user?.phone || '',
+                        digipin: session?.user?.digipin || '',
+                        coordinates: [],
+                      });
+                      setAddressFormVisible(true);
+                    }}
+                  />
+                )}
+              </>
             )}
           </View>
         )}
@@ -3041,31 +3491,52 @@ export default function CustomerApp({ session, onSignOut, onSessionUserUpdate }:
         {tab === 'account' && (
           <View>
             <Text style={styles.eyebrow}>YOUR TOMATO ACCOUNT</Text>
-            <Text style={styles.pageTitle}>Hello{session.user.name && typeof session.user.name === 'string' ? `, ${session.user.name.split(' ')[0]}` : ''}</Text>
-            <View style={styles.profileCard}>
-              <View style={styles.avatar}><Text style={styles.avatarText}>{String(session.user.name || 'T').charAt(0).toUpperCase()}</Text></View>
-              <Text style={styles.profileName}>{session.user.name || 'Tomato customer'}</Text>
-              <Text style={styles.customerBadge}>CUSTOMER ACCOUNT · {customerId}</Text>
-              {Boolean(session.user.email) && <Text style={styles.profileDetail}>{session.user.email}</Text>}
-              {Boolean(session.user.phone) && <Text style={styles.profileDetail}>{session.user.phone}</Text>}
-              {Boolean(session.user.digipin) && (
-                <Pressable onPress={() => void openMapplsMap(session.user.digipin)} style={styles.digipinRow}>
-                  <Text style={styles.profileDetail}>⌖ DIGIPIN: {formatDigipin(session.user.digipin)}</Text>
-                  <Text style={styles.mapplsPillSmall}>Mappls Map ↗</Text>
+            {session?.user ? (
+              <>
+                <Text style={styles.pageTitle}>Hello{session.user.name && typeof session.user.name === 'string' ? `, ${session.user.name.split(' ')[0]}` : ''}</Text>
+                <View style={styles.profileCard}>
+                  <View style={styles.avatar}><Text style={styles.avatarText}>{String(session.user.name || 'T').charAt(0).toUpperCase()}</Text></View>
+                  <Text style={styles.profileName}>{session.user.name || 'Tomato customer'}</Text>
+                  <Text style={styles.customerBadge}>CUSTOMER ACCOUNT · {customerId}</Text>
+                  {Boolean(session.user.email) && <Text style={styles.profileDetail}>{session.user.email}</Text>}
+                  {Boolean(session.user.phone) && <Text style={styles.profileDetail}>{session.user.phone}</Text>}
+                  {Boolean(session.user.digipin) && (
+                    <Pressable onPress={() => void openMapplsMap(session.user.digipin)} style={styles.digipinRow}>
+                      <Text style={styles.profileDetail}>⌖ DIGIPIN: {formatDigipin(session.user.digipin)}</Text>
+                      <Text style={styles.mapplsPillSmall}>Mappls Map ↗</Text>
+                    </Pressable>
+                  )}
+                </View>
+                <Pressable onPress={() => setTab('orders')} style={styles.menuLink}>
+                  <Text style={styles.menuLinkText}>📦   Order history</Text>
+                  <Text style={styles.chevron}>›</Text>
                 </Pressable>
-              )}
-            </View>
-            <Pressable onPress={() => setTab('orders')} style={styles.menuLink}>
-              <Text style={styles.menuLinkText}>📦   Order history</Text>
-              <Text style={styles.chevron}>›</Text>
-            </Pressable>
-            <Pressable onPress={() => setTab('addresses')} style={styles.menuLink}>
-              <Text style={styles.menuLinkText}>📍   Saved addresses</Text>
-              <Text style={styles.chevron}>›</Text>
-            </Pressable>
-            <Pressable onPress={signOut} style={[styles.menuLink, styles.signOutLink]}>
-              <Text style={styles.signOutText}>🚪   Sign out</Text>
-            </Pressable>
+                <Pressable onPress={() => setTab('addresses')} style={styles.menuLink}>
+                  <Text style={styles.menuLinkText}>📍   Saved addresses</Text>
+                  <Text style={styles.chevron}>›</Text>
+                </Pressable>
+                <Pressable onPress={signOut} style={[styles.menuLink, styles.signOutLink]}>
+                  <Text style={styles.signOutText}>🚪   Sign out</Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Text style={styles.pageTitle}>Guest User</Text>
+                <View style={styles.profileCard}>
+                  <View style={styles.avatar}><Text style={styles.avatarText}>👤</Text></View>
+                  <Text style={styles.profileName}>Browsing as Guest</Text>
+                  <Text style={styles.customerBadge}>NOT SIGNED IN</Text>
+                  <Text style={styles.profileDetail}>Sign in to save addresses, track orders and pay securely.</Text>
+                </View>
+                <Pressable
+                  onPress={() => onRequestSignIn ? onRequestSignIn() : onSignOut()}
+                  style={[styles.menuLink, { backgroundColor: '#d83a32', borderRadius: 12, marginTop: 14 }]}
+                >
+                  <Text style={[styles.menuLinkText, { color: '#ffffff', fontWeight: '800' }]}>🔑   Sign in / Register</Text>
+                  <Text style={[styles.chevron, { color: '#ffffff' }]}>›</Text>
+                </Pressable>
+              </>
+            )}
           </View>
         )}
       </ScrollView>
@@ -3439,14 +3910,6 @@ function DynamicTicker({
   );
 }
 
-function ModeButton({ active, label, onPress }: { active: boolean; label: string; onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} style={[styles.modeButton, active && styles.modeButtonActive]}>
-      <Text style={[styles.modeText, active && styles.modeTextActive]}>{label}</Text>
-    </Pressable>
-  );
-}
-
 function StoreCardWithSlider({
   store,
   isSelected,
@@ -3492,6 +3955,10 @@ function StoreCardWithSlider({
   }, [menuItems, allMenuItems, store, dietaryFilter]);
 
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [itemImageError, setItemImageError] = useState(false);
+  const [storeAvatarError, setStoreAvatarError] = useState(false);
+  const [storeFallbackError, setStoreFallbackError] = useState(false);
+  const isShopStore = Boolean(mode === 'shop' || (store as any).type === 'shop' || (store as any).isShop || Boolean(store.shopAddress));
   const slideAnim = useRef(new Animated.Value(0)).current;
 
   // Reset index if store items change or shrink
@@ -3525,6 +3992,19 @@ function StoreCardWithSlider({
     ? (storeItems[currentIndex] || storeItems[0])
     : undefined;
 
+  const isShopItem = Boolean(
+    isShopStore ||
+    activeItem?.isShopItem ||
+    (activeItem as any)?.storeType === 'shop' ||
+    (activeItem as any)?.mode === 'shop' ||
+    (activeItem as any)?.isShop
+  );
+  const hasCustomItemImage = Boolean(activeItem?.image && !itemImageError);
+
+  useEffect(() => {
+    setItemImageError(false);
+  }, [currentIndex, activeItem?._id, activeItem?.image]);
+
   const translateX = slideAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [16, 0],
@@ -3551,11 +4031,24 @@ function StoreCardWithSlider({
       {/* Restaurant Header */}
       <View style={styles.storeCardHeader}>
         <View style={styles.storeCardAvatarWrap}>
-          {store.image ? (
-            <Image source={{ uri: apiPath(store.image) }} style={styles.storeCardAvatar} />
+          {store.image && !storeAvatarError ? (
+            <Image
+              source={{ uri: apiPath(store.image) }}
+              style={styles.storeCardAvatar}
+              onError={() => setStoreAvatarError(true)}
+            />
           ) : (
-            <View style={styles.storeCardAvatarPlaceholder}>
-              <Text style={styles.storeCardAvatarEmoji}>{mode === 'shop' ? '🛒' : '🍽️'}</Text>
+            <View
+              style={[
+                styles.storeCardAvatarPlaceholder,
+                isShopStore ? styles.shopDefaultImageBg : styles.restaurantDefaultImageBg,
+              ]}
+            >
+              <Image
+                source={getDefaultStoreLogo(isShopStore)}
+                style={styles.storeCardAvatarIcon}
+                resizeMode="contain"
+              />
             </View>
           )}
         </View>
@@ -3600,13 +4093,25 @@ function StoreCardWithSlider({
           >
             {/* Dish / Product Image in Square Area */}
             <View style={styles.slidingItemSquareImageWrap}>
-              {activeItem.image ? (
-                <Image source={{ uri: apiPath(activeItem.image) }} style={styles.slidingItemSquareImage} resizeMode="cover" />
+              {hasCustomItemImage ? (
+                <Image
+                  source={{ uri: apiPath(activeItem.image) }}
+                  style={styles.slidingItemSquareImage}
+                  resizeMode="cover"
+                  onError={() => setItemImageError(true)}
+                />
               ) : (
-                <View style={styles.slidingItemSquarePlaceholder}>
-                  <Text style={styles.slidingItemSquareEmoji}>
-                    {getCategoryIcon(activeItem.category || '', mode)}
-                  </Text>
+                <View
+                  style={[
+                    styles.defaultItemImageContainer,
+                    isShopItem ? styles.shopDefaultImageBg : styles.restaurantDefaultImageBg,
+                  ]}
+                >
+                  <Image
+                    source={getDefaultItemImage(isShopItem)}
+                    style={styles.defaultItemImage}
+                    resizeMode="contain"
+                  />
                 </View>
               )}
               <View style={styles.slidingItemSquareHeaderRow}>
@@ -3678,11 +4183,24 @@ function StoreCardWithSlider({
       ) : (
         /* Fallback if no items currently match */
         <View style={styles.storeNoItemsBox}>
-          {store.image ? (
-            <Image source={{ uri: apiPath(store.image) }} style={styles.storeCardFallbackImage} />
+          {store.image && !storeFallbackError ? (
+            <Image
+              source={{ uri: apiPath(store.image) }}
+              style={styles.storeCardFallbackImage}
+              onError={() => setStoreFallbackError(true)}
+            />
           ) : (
-            <View style={styles.storeCardAvatarPlaceholderLarge}>
-              <Text style={styles.storeEmoji}>{mode === 'shop' ? '🛒' : '🍽️'}</Text>
+            <View
+              style={[
+                styles.storeCardAvatarPlaceholderLarge,
+                isShopStore ? styles.shopDefaultImageBg : styles.restaurantDefaultImageBg,
+              ]}
+            >
+              <Image
+                source={getDefaultStoreLogo(isShopStore)}
+                style={styles.storeCardAvatarIconLarge}
+                resizeMode="contain"
+              />
             </View>
           )}
           <Text style={styles.storeNoItemsText}>
@@ -3700,36 +4218,60 @@ function MenuCard({
   closed = false,
   storeName,
   onPressStore,
+  isShop,
 }: {
   item: MenuItem;
   onAdd: (variant?: ItemVariant) => void;
   closed?: boolean;
   storeName?: string;
   onPressStore?: () => void;
+  isShop?: boolean;
 }) {
   const variants = useMemo(() => (item ? getItemVariants(item) : []), [item]);
   const [selectedVariant, setSelectedVariant] = useState<ItemVariant>(() => (variants[0] || (item ? { id: 'default', name: 'Regular', price: item.price } : { id: 'default', name: 'Regular', price: 0 })));
   const [variantPickerVisible, setVariantPickerVisible] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
   useEffect(() => {
-    if (variants.length > 0) {
-      setSelectedVariant((current) => variants.find((v) => v.id === current?.id) || variants[0]);
-    }
-  }, [variants]);
+    setImageError(false);
+  }, [item?._id, item?.image]);
 
   if (!item) return null;
   const unavailable = closed || (item.quantity !== undefined && item.quantity <= 0);
   const isVeg = isItemVeg(item);
+  const isShopItem = Boolean(
+    isShop ?? (
+      item.isShopItem ||
+      (item as any).storeType === 'shop' ||
+      (item as any).mode === 'shop' ||
+      (item as any).isShop
+    )
+  );
+  const hasCustomImage = Boolean(item.image && !imageError);
 
   return (
     <View style={styles.menuCardSquare}>
       {/* Top: Square Image */}
       <View style={styles.menuSquareImageWrap}>
-        {item.image ? (
-          <Image source={{ uri: apiPath(item.image) }} style={styles.menuSquareImage} resizeMode="cover" />
+        {hasCustomImage ? (
+          <Image
+            source={{ uri: apiPath(item.image) }}
+            style={styles.menuSquareImage}
+            resizeMode="cover"
+            onError={() => setImageError(true)}
+          />
         ) : (
-          <View style={styles.menuSquareImagePlaceholder}>
-            <Text style={styles.menuSquareEmoji}>{item.isShopItem ? '🥗' : '🍲'}</Text>
+          <View
+            style={[
+              styles.defaultItemImageContainer,
+              isShopItem ? styles.shopDefaultImageBg : styles.restaurantDefaultImageBg,
+            ]}
+          >
+            <Image
+              source={getDefaultItemImage(isShopItem)}
+              style={styles.defaultItemImage}
+              resizeMode="contain"
+            />
           </View>
         )}
         <View style={styles.menuSquareHeaderRow}>
@@ -3853,443 +4395,6 @@ function MenuCard({
         </Pressable>
       </Modal>
     </View>
-  );
-}
-
-function QuantityControl({
-  quantity,
-  onDecrease,
-  onIncrease,
-}: {
-  quantity: number;
-  onDecrease: () => void;
-  onIncrease: () => void;
-}) {
-  return (
-    <View style={styles.quantityControl}>
-      <Pressable accessibilityLabel="Decrease quantity" onPress={onDecrease} style={styles.quantityButton}>
-        <Text style={styles.quantityButtonText}>−</Text>
-      </Pressable>
-      <Text style={styles.quantity}>{quantity}</Text>
-      <Pressable accessibilityLabel="Increase quantity" onPress={onIncrease} style={styles.quantityButton}>
-        <Text style={styles.quantityButtonText}>+</Text>
-      </Pressable>
-    </View>
-  );
-}
-
-function BillRow({ label, value, bold = false }: { label: string; value: string; bold?: boolean }) {
-  return (
-    <View style={styles.billRow}>
-      <Text style={[styles.billLabel, bold && styles.billBold]}>{label}</Text>
-      <Text style={[styles.billValue, bold && styles.billBold]}>{value}</Text>
-    </View>
-  );
-}
-
-function openRiderLocation(lat: number, lng: number) {
-  const url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
-  void Linking.openURL(url).catch(() => Alert.alert('Unable to open maps', 'Install a map application and try again.'));
-}
-
-function OrderCard({
-  order,
-  tracking,
-  trackingError,
-  trackingLoading,
-  bill,
-  billLoading,
-  onTrack,
-  onViewBill,
-  onReview,
-  sessionToken,
-}: {
-  order: Order;
-  tracking?: OrderTracking;
-  trackingError?: string;
-  trackingLoading: boolean;
-  bill?: Bill;
-  billLoading: boolean;
-  onTrack: () => void;
-  onViewBill: () => void;
-  onReview: (item: { id: string; name: string; rating?: number }) => void;
-  sessionToken?: string;
-}) {
-  const isShopOrder = Boolean(order.isShopOrder || order.shopId || order.shopName);
-  const partner = order.shopName || order.restaurantName || (isShopOrder ? 'Tomato shop' : 'Tomato restaurant');
-  const normalizedStatus = (order.status || 'placed').toLowerCase().trim();
-  const isDelivered = normalizedStatus === 'delivered';
-  const isCancelled = normalizedStatus === 'cancelled';
-  const returnAccepted = isOrderReturnAccepted(order, tracking);
-  const isTrackingActive = isOrderTrackingActive(order, tracking);
-  const isAcceptedByStore = !['placed', 'pending'].includes(normalizedStatus);
-  const isTrackingDisabled = (!isCancelled && !isAcceptedByStore) || trackingLoading;
-  const isComplete = !isTrackingActive;
-  const formattedOrderNumber = formatOrderNumber(order);
-  const statusLabel = isCancelled
-    ? (returnAccepted ? `Returned to ${order.returnAcceptedBy || partner}` : 'Cancelled · Returning')
-    : formatOrderStatus(order.status || 'placed');
-  const badgeStyle = getOrderStatusBadgeColors(order.status || 'placed');
-  const riderLocation = tracking?.rider?.currentLocation || tracking?.telemetry?.riderLocation
-    || tracking?.telemetry?.currentLocation;
-  const riderLat = riderLocation?.lat;
-  const riderLng = riderLocation?.lng;
-  return (
-    <View style={styles.orderCard}>
-      {/* Row 1: Partner name on left, Amount + Bill icon on right */}
-      <View style={styles.orderTopRow}>
-        <Text style={[styles.orderPlace, styles.flex]} numberOfLines={1}>{partner}</Text>
-        <View style={styles.orderAmountAndBillRow}>
-          <Text style={styles.orderTotal}>{formatRupees(Number(order.totalAmount || 0))}</Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={bill ? 'Close bill invoice' : 'View bill invoice'}
-            disabled={billLoading}
-            onPress={onViewBill}
-            style={[styles.orderIconButton, bill && styles.orderIconButtonActive]}
-          >
-            {billLoading ? (
-              <ActivityIndicator size="small" color="#d83a32" />
-            ) : (
-              <Text style={styles.orderActionIconEmoji}>🧾</Text>
-            )}
-          </Pressable>
-        </View>
-      </View>
-
-      {/* Row 2: Order number + Status badge + Date on left, Track icon on right */}
-      <View style={styles.orderNumberRow}>
-        <View style={styles.orderNumberAndStatusRow}>
-          <Text style={styles.orderNumber}>{formattedOrderNumber}</Text>
-          <View style={[styles.orderStatusBadge, { backgroundColor: badgeStyle.bg }]}>
-            <Text style={[styles.orderStatusBadgeText, { color: badgeStyle.text }]}>
-              {statusLabel}
-            </Text>
-          </View>
-          {!!order.createdAt && (
-            <Text style={styles.orderDateMuted}>
-              · {new Date(order.createdAt).toLocaleDateString()}
-            </Text>
-          )}
-        </View>
-        {!isComplete && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={
-              !isAcceptedByStore && !isCancelled
-                ? 'Tracking disabled until order is accepted by store'
-                : tracking
-                  ? 'Hide tracking'
-                  : isCancelled
-                    ? 'Track return to source'
-                    : 'Track order'
-            }
-            disabled={isTrackingDisabled}
-            onPress={onTrack}
-            style={[
-              styles.orderIconButton,
-              tracking && styles.orderIconButtonActive,
-              isTrackingDisabled && styles.orderIconButtonDisabled,
-            ]}
-          >
-            {trackingLoading ? (
-              <ActivityIndicator size="small" color="#d83a32" />
-            ) : (
-              <Text style={[styles.orderActionIconEmoji, isTrackingDisabled && styles.orderActionIconEmojiDisabled]}>
-                {isCancelled ? '🔄' : '📍'}
-              </Text>
-            )}
-          </Pressable>
-        )}
-      </View>
-
-      {/* Row 3: Payment method & status (right) */}
-      <View style={styles.orderStatusRow}>
-        <View style={styles.flex} />
-        <Text style={styles.paymentNoteRow}>
-          {(() => {
-            const isPaid = (order.paymentStatus || '').toLowerCase() === 'paid';
-            const isPending = (order.paymentStatus || '').toLowerCase() === 'pending' || !isPaid;
-            const methodRaw = (order.paymentMethod || 'cod').toLowerCase();
-            const isCod = methodRaw === 'cod' || methodRaw === 'cash';
-            const methodLabel = methodRaw === 'razorpay' ? '⚡ RAZORPAY' : isCod ? 'COD' : methodRaw.toUpperCase();
-            return (
-              <>
-                <Text style={isCod ? { color: '#dc2626', fontWeight: '800' } : undefined}>
-                  {methodLabel}
-                </Text>
-                {' · '}
-                <Text style={isPaid ? { color: '#16a34a', fontWeight: '800' } : isPending ? { color: '#ca8a04', fontWeight: '800' } : undefined}>
-                  {(order.paymentStatus || (isPaid ? 'paid' : 'pending')).toUpperCase()}
-                </Text>
-              </>
-            );
-          })()}
-        </Text>
-      </View>
-      {!!order.items?.length && (
-        <View style={styles.orderItemsRow}>
-          <Text style={[styles.orderItems, styles.flex]} numberOfLines={2}>
-            {order.items.map((item) => `${item.name}(${item.quantity ?? 1})`).join(', ')}
-          </Text>
-          {isDelivered && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Review ordered items"
-              onPress={() => {
-                const item = order.items?.[0];
-                const id = item?.foodItemId || item?.itemId || item?._id || '';
-                if (item) onReview({ id, name: item.name });
-              }}
-              style={styles.reviewStringBtn}
-            >
-              <Text style={styles.link}>Review</Text>
-            </Pressable>
-          )}
-        </View>
-      )}
-      {!!order.deliveryAddress?.line1 && (
-        <View style={styles.orderDeliveryRow}>
-          <Text style={[styles.itemDescription, styles.flex]} numberOfLines={2}>
-            {order.deliveryAddress.label || 'Delivery'} · {order.deliveryAddress.line1}
-            {order.deliveryAddress.digipin ? ` (DIGIPIN: ${formatDigipin(order.deliveryAddress.digipin)})` : ''}
-          </Text>
-          {isDelivered && (
-            <View style={styles.orderRatingStarsRow}>
-              {[1, 2, 3, 4, 5].map((star) => (
-                <Pressable
-                  key={star}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Rate ${star} stars`}
-                  onPress={() => {
-                    const item = order.items?.[0];
-                    const id = item?.foodItemId || item?.itemId || item?._id || '';
-                    if (item) onReview({ id, name: item.name, rating: star });
-                  }}
-                  hitSlop={3}
-                >
-                  <Text style={styles.orderStarIcon}>★</Text>
-                </Pressable>
-              ))}
-            </View>
-          )}
-        </View>
-      )}
-      {!!(order.pickupDigipin || order.restaurantDigipin || order.shopDigipin) && (
-        <Text style={styles.itemDescription}>
-          Pickup DIGIPIN: {formatDigipin(order.pickupDigipin || order.restaurantDigipin || order.shopDigipin)}
-        </Text>
-      )}
-
-      {!!bill && (
-        <View style={styles.billCard}>
-          <Text style={styles.trackingTitle}>Invoice {bill.invoiceNumber || bill.orderNumber || order.orderNumber || ''}</Text>
-          {!!bill.date && <Text style={styles.itemDescription}>{new Date(bill.date).toLocaleString()}</Text>}
-          {(bill.items || []).map((item, index) => (
-            <BillRow
-              key={`${item.name || 'item'}-${index}`}
-              label={`${item.quantity || 1} × ${item.name || 'Item'}`}
-              value={formatRupees(Number(item.totalPrice ?? (Number(item.price || 0) * Number(item.quantity || 1))))}
-            />
-          ))}
-          <BillRow label="Subtotal" value={formatRupees(Number(bill.subtotal || 0))} />
-          {(bill.cgst !== undefined || bill.sgst !== undefined) ? (
-            <>
-              <BillRow label="CGST" value={formatRupees(Number(bill.cgst || 0))} />
-              <BillRow label="SGST" value={formatRupees(Number(bill.sgst || 0))} />
-            </>
-          ) : (
-            <BillRow label="Tax" value={formatRupees(Number(bill.tax || 0))} />
-          )}
-          <BillRow label="Delivery fee" value={formatRupees(Number(bill.deliveryFee || 0))} />
-          {!!Number(bill.discountAmount || 0) && (
-            <BillRow label={`Coupon${bill.couponCodes?.length ? ` (${bill.couponCodes.join(', ')})` : ''}`} value={`−${formatRupees(Number(bill.discountAmount || 0))}`} />
-          )}
-          <View style={styles.billDivider} />
-          <BillRow bold label="Total" value={formatRupees(Number(bill.totalAmount || order.totalAmount || 0))} />
-          <Text style={styles.paymentNote}>
-            {(() => {
-              const rawMethod = (bill.paymentMethod || order.paymentMethod || 'cod').toLowerCase();
-              const isCod = rawMethod === 'cod' || rawMethod === 'cash';
-              const rawStatus = (bill.paymentStatus || order.paymentStatus || '').toLowerCase();
-              const isPaid = rawStatus === 'paid';
-              const isPending = rawStatus === 'pending' || !isPaid;
-              return (
-                <>
-                  <Text style={isCod ? { color: '#dc2626', fontWeight: '800' } : undefined}>
-                    {isCod ? 'COD' : rawMethod.toUpperCase()}
-                  </Text>
-                  {' · '}
-                  <Text style={isPaid ? { color: '#16a34a', fontWeight: '800' } : isPending ? { color: '#ca8a04', fontWeight: '800' } : undefined}>
-                    {(rawStatus || (isPaid ? 'paid' : 'pending')).toUpperCase()}
-                  </Text>
-                </>
-              );
-            })()}
-          </Text>
-        </View>
-      )}
-      {!isComplete && (
-        <>
-          {trackingLoading && (
-            <View style={styles.trackingCard}>
-              <ActivityIndicator color="#d83a32" />
-              <Text style={styles.itemDescription}>Loading the latest order and rider details…</Text>
-            </View>
-          )}
-          {!!trackingError && (
-            <View style={styles.trackingError}>
-              <Text style={styles.trackingErrorText}>Tracking could not be refreshed: {trackingError}</Text>
-              <Pressable onPress={onTrack}><Text style={styles.link}>Try again</Text></Pressable>
-            </View>
-          )}
-          {!!tracking && (
-            <View style={[styles.trackingCard, isCancelled && styles.trackingCardCancelled]}>
-              <Text style={[styles.trackingTitle, isCancelled && styles.trackingTitleCancelled]}>
-                {isCancelled
-                  ? (returnAccepted ? 'Tracking complete' : '🔄 Live return tracking')
-                  : (tracking.trackingClosed ? 'Tracking complete' : 'Live delivery status')}
-              </Text>
-              {isCancelled ? (
-                <>
-                  <Text style={styles.itemDescription}>
-                    Status: <Text style={{ fontWeight: '800', color: returnAccepted ? '#166534' : '#b42318' }}>
-                      {returnAccepted
-                        ? `Returned & accepted by ${order.returnAcceptedBy || partner}`
-                        : `Cancelled · Returning to ${partner}`}
-                    </Text>
-                  </Text>
-                  <Text style={styles.itemDescription}>
-                    {returnAccepted
-                      ? `The return was accepted by ${order.returnAcceptedBy || partner}. Tracking has officially ended.`
-                      : `Order was cancelled. Tracking remains active until the package is returned and accepted by the source (${partner}).`}
-                  </Text>
-                  {!returnAccepted && (
-                    <View style={styles.sourceAcceptancePendingBox}>
-                      <Text style={styles.sourceAcceptancePendingText}>
-                        ⏳ Awaiting return acceptance from: {partner} or Admin
-                      </Text>
-                    </View>
-                  )}
-                  {!!tracking.rider && (
-                    <Text style={styles.itemDescription}>
-                      Rider returning order: {tracking.rider.name || 'Assigned rider'}
-                      {tracking.rider.phone ? ` · ${tracking.rider.phone}` : ''}
-                    </Text>
-                  )}
-                  {typeof riderLat === 'number' && typeof riderLng === 'number' && (
-                    <Pressable onPress={() => openRiderLocation(riderLat, riderLng)}>
-                      <Text style={styles.link}>View rider return route on map</Text>
-                    </Pressable>
-                  )}
-                  {!returnAccepted && (
-                    <Text style={styles.itemDescription}>Tracking refreshes automatically while this screen is open.</Text>
-                  )}
-                </>
-              ) : (
-                <>
-                  {tracking.rider ? (
-                    <LiveRouteTracker
-                      orderId={order._id}
-                      orderNumber={order.orderNumber}
-                      initialTracking={tracking as any}
-                      endpoint={`/api/customer/orders/${encodeURIComponent(order._id)}/live-tracking`}
-                      token={sessionToken}
-                      isShop={isShopOrder}
-                      fallbackRiderName={tracking.rider?.name}
-                      fallbackRiderPhone={tracking.rider?.phone}
-                      fallbackCustomerName={order.customerName}
-                      fallbackCustomerAddress={order.deliveryAddress}
-                      fallbackCustomerDigipin={
-                        resolveCustomerDigipin(order) ||
-                        order.deliveryAddress?.digipin
-                      }
-                      fallbackStoreName={partner}
-                      fallbackStoreDigipin={order.pickupDigipin || order.restaurantDigipin || order.shopDigipin}
-                      fallbackStoreAddress={order.restaurantAddress || order.shopAddress}
-                      isPickedUp={Boolean(tracking.isPickedUp || tracking.pickupStatus === 'picked_up')}
-                    />
-                  ) : (
-                    <>
-                      <Text style={styles.itemDescription}>
-                        Status: {(tracking.status || order.status || 'placed').replaceAll('_', ' ')} · Waiting for rider assignment
-                      </Text>
-                      {(tracking.estimatedMinutes ?? tracking.expectedDeliveryTimingMinutes) !== undefined && (
-                        <Text style={styles.itemDescription}>
-                          Estimated delivery: {tracking.estimatedMinutes ?? tracking.expectedDeliveryTimingMinutes} min
-                        </Text>
-                      )}
-                      {!tracking.trackingClosed && (
-                        <Text style={styles.itemDescription}>
-                          {['placed', 'pending'].includes(tracking.status || order.status || '')
-                            ? 'The restaurant or shop needs to accept this order before a rider can accept the delivery.'
-                            : 'Your order is accepted. A rider working in your area will appear here after accepting the delivery.'}
-                        </Text>
-                      )}
-                    </>
-                  )}
-                </>
-              )}
-            </View>
-          )}
-        </>
-      )}
-    </View>
-  );
-}
-
-function DashboardTile({ label, value }: { label: string; value: number }) {
-  return (
-    <View style={styles.dashboardTile}>
-      <Text style={styles.dashboardTileValue}>{value}</Text>
-      <Text style={styles.dashboardTileLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function EmptyState({
-  title,
-  detail,
-  actionLabel,
-  onAction,
-}: {
-  title: string;
-  detail: string;
-  actionLabel?: string;
-  onAction?: () => void;
-}) {
-  return (
-    <View style={styles.emptyCard}>
-      <Text style={styles.emptyEmoji}>🍅</Text>
-      <Text style={styles.emptyTitle}>{title}</Text>
-      <Text style={styles.emptyDetail}>{detail}</Text>
-      {actionLabel && onAction && (
-        <Pressable onPress={onAction} style={styles.emptyAction}>
-          <Text style={styles.emptyActionText}>{actionLabel}</Text>
-        </Pressable>
-      )}
-    </View>
-  );
-}
-
-function PrimaryButton({
-  label,
-  onPress,
-  disabled = false,
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      disabled={disabled}
-      onPress={onPress}
-      style={[styles.primaryButton, disabled && styles.buttonDisabled]}
-    >
-      <Text style={styles.primaryButtonText}>{label}</Text>
-    </Pressable>
   );
 }
 
@@ -5273,6 +5378,31 @@ const styles = StyleSheet.create({
   menuSquareEmoji: {
     fontSize: 40,
   },
+  defaultItemImageContainer: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: 28,
+  },
+  defaultItemImage: {
+    width: 60,
+    height: 60,
+  },
+  restaurantDefaultImageBg: {
+    backgroundColor: '#fff1f0',
+  },
+  shopDefaultImageBg: {
+    backgroundColor: '#fef9ee',
+  },
+  storeCardAvatarIcon: {
+    width: 24,
+    height: 24,
+  },
+  storeCardAvatarIconLarge: {
+    width: 38,
+    height: 38,
+  },
   menuSquareHeaderRow: {
     position: 'absolute',
     top: 6,
@@ -5585,6 +5715,30 @@ const styles = StyleSheet.create({
   quantity: { minWidth: 16, textAlign: 'center', color: '#302923', fontWeight: '700' },
   addressOption: { backgroundColor: '#fff', borderColor: '#eee5dd', borderWidth: 1, borderRadius: 13, marginBottom: 8, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
   addressOptionSelected: { borderColor: '#d83a32', backgroundColor: '#fff8f4' },
+  addressOptionUnserviceable: { borderColor: '#fca5a5', backgroundColor: '#fff8f8' },
+  addressNameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' },
+  addressUnserviceableBadge: { backgroundColor: '#fee2e2', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, borderWidth: 0.5, borderColor: '#f87171' },
+  addressUnserviceableText: { color: '#b91c1c', fontSize: 10.5, fontWeight: '700' },
+  addressServiceableBadge: { backgroundColor: '#dcfce7', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, borderWidth: 0.5, borderColor: '#86efac' },
+  addressServiceableText: { color: '#15803d', fontSize: 10.5, fontWeight: '700' },
+  tooFarBanner: { backgroundColor: '#fff1f0', borderColor: '#fca5a5', borderWidth: 1.5, borderRadius: 14, padding: 14, marginBottom: 16 },
+  tooFarHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  tooFarIcon: { fontSize: 18 },
+  tooFarTitle: { fontSize: 15, fontWeight: '800', color: '#b91c1c' },
+  tooFarText: { fontSize: 13, color: '#7f1d1d', lineHeight: 18, marginBottom: 6 },
+  tooFarBold: { fontWeight: '800', color: '#991b1b' },
+  tooFarSubtext: { fontSize: 12, color: '#991b1b', lineHeight: 16, opacity: 0.9 },
+  tooFarUpdateBtn: { alignSelf: 'flex-start', backgroundColor: '#b91c1c', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7, marginTop: 10 },
+  tooFarUpdateBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  serviceLocationPill: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 12 },
+  serviceLocationLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  serviceLocationIcon: { fontSize: 18 },
+  serviceLocationTitle: { color: '#1e293b', fontSize: 13, fontWeight: '800' },
+  serviceLocationSubtitle: { color: '#64748b', fontSize: 11, marginTop: 1 },
+  serviceLocationChangeBtn: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5, marginLeft: 8 },
+  serviceLocationChangeText: { color: '#d83a32', fontSize: 11.5, fontWeight: '700' },
+  paymentBlockedWarning: { backgroundColor: '#fef2f2', borderColor: '#fecaca', borderWidth: 1, borderRadius: 12, padding: 12, marginTop: 8, marginBottom: 10 },
+  paymentBlockedText: { color: '#b91c1c', fontSize: 12, fontWeight: '700', lineHeight: 17 },
   radio: { color: '#d83a32', fontSize: 18 },
   billCard: { backgroundColor: '#fff', borderColor: '#f0e8e1', borderWidth: 1, borderRadius: 16, padding: 15, marginTop: 8, marginBottom: 14 },
   billRow: { flexDirection: 'row', justifyContent: 'space-between', marginVertical: 5 },
@@ -5640,6 +5794,67 @@ const styles = StyleSheet.create({
   addressActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 13 },
   removeLink: { color: '#b42318', fontWeight: '700', fontSize: 13 },
   formCard: { backgroundColor: '#fff', borderColor: '#f0e8e1', borderWidth: 1, borderRadius: 18, padding: 15, marginTop: 13 },
+  collapsibleHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+  },
+  collapsibleHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  collapsibleHeaderIcon: {
+    fontSize: 16,
+  },
+  collapsibleHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  collapsibleActionText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#d83a32',
+  },
+  dropdownChevron: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#685e56',
+    marginLeft: 2,
+  },
+  collapsibleContent: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#f5eee8',
+  },
+  couponAppliedBadge: {
+    backgroundColor: '#dcfce7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  couponAppliedBadgeText: {
+    color: '#15803d',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  couponAppliedDiscount: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#16a34a',
+  },
+  paymentSelectedSummary: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#685e56',
+    marginTop: 2,
+  },
   couponCard: { backgroundColor: '#fff', borderColor: '#f0e8e1', borderWidth: 1, borderRadius: 16, padding: 14, marginTop: 12, marginBottom: 10 },
   couponSuccess: { color: '#27734a', fontSize: 11, fontWeight: '700', marginTop: 7 },
   couponError: { color: '#b42318', fontSize: 11, marginTop: 7 },

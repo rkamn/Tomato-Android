@@ -126,7 +126,7 @@ async function navigateToPickup(order: Order) {
 
 function extractPincode(text?: string): string | undefined {
   if (!text) return undefined;
-  const match = text.match(/\b([1-9][0-9]{5})\b/);
+  const match = text.match(/\b([1-9][0-9]{4,5})\b/);
   return match ? match[1] : undefined;
 }
 
@@ -332,6 +332,7 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
   const [newDeliveryOffer, setNewDeliveryOffer] = useState<Order | null>(null);
   const isApproved = session.user.isApproved !== false;
   const knownOfferStatuses = useRef<Map<string, string> | null>(null);
+  const rejectedOfferIds = useRef<Set<string>>(new Set());
 
   // Serviceable Area State
   const [operatingPincode, setOperatingPincode] = useState(
@@ -428,14 +429,23 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
     const eligibleOrders = nextOrders.filter((order) =>
       ['accepted', 'preparing', 'ready_for_pickup'].includes(order.status || ''),
     );
+    const unrejectedEligible = eligibleOrders.filter(
+      (order) => !rejectedOfferIds.current.has(order._id) && isOrderInServiceablePincode(order, session.user, operatingPincode),
+    );
+
     if (knownOfferStatuses.current) {
-      const newOffer = eligibleOrders.find((order) => {
+      const newOffer = unrejectedEligible.find((order) => {
         const previousStatus = knownOfferStatuses.current?.get(order._id);
         const isFresh = !['accepted', 'preparing', 'ready_for_pickup'].includes(previousStatus || '');
-        return isFresh && isOrderInServiceablePincode(order, session.user, operatingPincode);
+        return isFresh;
       });
       if (newOffer && isOnline && isApproved) {
         setNewDeliveryOffer(newOffer);
+      }
+    } else {
+      const waitingOffer = unrejectedEligible[0];
+      if (waitingOffer && isOnline && isApproved) {
+        setNewDeliveryOffer(waitingOffer);
       }
     }
     knownOfferStatuses.current = new Map(
@@ -561,12 +571,12 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
   }, [tab, session.token]);
 
   useEffect(() => {
-    if (tab !== 'available' || !isOnline || !isApproved) return;
+    if (!isOnline || !isApproved) return;
     const interval = setInterval(() => {
       void loadAvailable().catch((reason) => setError(readableError(reason)));
-    }, 15_000);
+    }, 5_000);
     return () => clearInterval(interval);
-  }, [tab, isOnline, isApproved, session.token]);
+  }, [isOnline, isApproved, session.token, operatingPincode]);
 
   useEffect(() => {
     if (!isOnline || !isApproved) return;
@@ -1263,11 +1273,25 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
             setError(readableError(err));
           }
         }}
+        onReject={async (order) => {
+          try {
+            rejectedOfferIds.current.add(order._id);
+            await updateOrder(order, 'reject');
+            setNewDeliveryOffer(null);
+          } catch (err) {
+            setError(readableError(err));
+          }
+        }}
         onViewOffer={() => {
           setTab('available');
           setNewDeliveryOffer(null);
         }}
-        onClose={() => setNewDeliveryOffer(null)}
+        onClose={() => {
+          if (newDeliveryOffer) {
+            rejectedOfferIds.current.add(newDeliveryOffer._id);
+          }
+          setNewDeliveryOffer(null);
+        }}
       />
       <SignOutModal
         visible={signOutModalVisible}

@@ -434,3 +434,60 @@ export function getOrderStatusBadgeColors(status: unknown): { bg: string; text: 
   if (s === 'returned') return { bg: '#fef2f2', text: '#b91c1c' };
   return { bg: '#fff0e5', text: '#9b541f' };
 }
+
+export type OrderTracking = {
+  orderId?: string;
+  orderNumber?: string;
+  riderUserId?: string;
+  status?: string;
+  trackingClosed?: boolean;
+  estimatedMinutes?: number;
+  expectedDeliveryTimingMinutes?: number;
+  telemetry?: {
+    etaMinutes?: number;
+    lastPingSecondsAgo?: number | null;
+    isLiveOnline?: boolean;
+    riderLocation?: { lat?: number; lng?: number };
+    currentLocation?: { lat?: number; lng?: number };
+  };
+  isPickedUp?: boolean;
+  pickupStatus?: string;
+  rider?: {
+    name?: string;
+    phone?: string;
+    lastLocationUpdated?: string;
+    isOnline?: boolean;
+    currentLocation?: { lat?: number; lng?: number };
+    location?: { coordinates?: number[] };
+  };
+  returnStatus?: string;
+  returnAccepted?: boolean;
+  returnAcceptedBy?: string;
+};
+
+export type BillItem = {
+  name?: string;
+  quantity?: number;
+  price?: number;
+  totalPrice?: number;
+};
+
+export type Bill = {
+  invoiceNumber?: string;
+  orderNumber?: string;
+  date?: string;
+  items?: BillItem[];
+  subtotal?: number;
+  cgst?: number;
+  sgst?: number;
+  tax?: number;
+  deliveryFee?: number;
+  grossAmount?: number;
+  discountAmount?: number;
+  couponCodes?: string[];
+  totalAmount?: number;
+  paymentMethod?: string;
+  paymentStatus?: string;
+  orderStatus?: string;
+};
+

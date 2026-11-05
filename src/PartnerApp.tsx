@@ -9,7 +9,6 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -152,6 +151,7 @@ export default function PartnerApp({
       ? 'Shop Orders'
       : 'Restaurant Orders';
   const isApproved = session.user.isApproved !== false;
+  const storeDigipin = session.user.digipin || (session.user as any)?.storeDigipin || (session.user as any)?.restaurantDigipin || (session.user as any)?.shopDigipin || '';
   const [tab, setTab] = useState<PartnerTab>('orders');
   type OrderFilter = 'all' | 'new' | 'in_progress' | 'out_for_delivery' | 'cancelled_today' | 'delivered_today';
   const [orderFilter, setOrderFilter] = useState<OrderFilter>('all');
@@ -721,10 +721,18 @@ export default function PartnerApp({
         city={session.user.city || 'Bengaluru'}
         pincode={session.user.pincode || '560001'}
         onNotificationPress={() => void showNotifications()}
-        rightActions={
-          <Pressable onPress={() => void refresh()} style={styles.headerIconButton}>
-            <Text style={styles.headerRefreshIcon}>↻</Text>
-          </Pressable>
+        profileBottomAction={
+          <View style={styles.headerPartnerStatusRow}>
+            <Text style={styles.headerDigipinText}>
+              DIGIPIN: {storeDigipin ? formatDigipin(storeDigipin) : 'Not configured'}
+            </Text>
+            <PartnerOpenCloseToggle
+              isOpen={isOpen}
+              saving={savingStatus}
+              disabled={loading || !isApproved}
+              onToggle={(val) => void toggleOpen(val)}
+            />
+          </View>
         }
         roleLabel={`${kind} partner`}
         profileMenuItems={[
@@ -778,23 +786,6 @@ export default function PartnerApp({
             {!isApproved && (
               <ApprovalNotice kind={kind} />
             )}
-            <View style={styles.statusCard}>
-              <View style={styles.flex}>
-                <Text style={styles.statusTitle}>{isOpen ? 'Accepting orders' : 'Not accepting orders'}</Text>
-                <Text style={styles.muted}>
-                  {savingStatus ? 'Updating status…' : `${kind} is ${isOpen ? 'open' : 'closed'}`}
-                  {session.user.digipin ? ` · DIGIPIN: ${formatDigipin(session.user.digipin)}` : ''}
-                </Text>
-              </View>
-              <Switch
-                accessibilityLabel={`Set ${kind.toLowerCase()} ${isOpen ? 'closed' : 'open'}`}
-                disabled={savingStatus || loading || !isApproved}
-                onValueChange={(value) => void toggleOpen(value)}
-                thumbColor={isOpen ? '#fff' : '#f5f5f5'}
-                trackColor={{ false: '#cfc5bc', true: '#49a86a' }}
-                value={isOpen}
-              />
-            </View>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -1454,6 +1445,46 @@ function Empty({ title, detail }: { title: string; detail: string }) {
   );
 }
 
+function PartnerOpenCloseToggle({
+  isOpen,
+  saving = false,
+  disabled = false,
+  onToggle,
+}: {
+  isOpen: boolean;
+  saving?: boolean;
+  disabled?: boolean;
+  onToggle: (nextVal: boolean) => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityState={{ checked: isOpen }}
+      accessibilityLabel={`Store is ${isOpen ? 'open' : 'closed'}`}
+      disabled={disabled || saving}
+      onPress={() => onToggle(!isOpen)}
+      hitSlop={8}
+      style={[
+        styles.partnerToggleTrack,
+        isOpen ? styles.partnerToggleTrackOpen : styles.partnerToggleTrackClose,
+        (disabled || saving) && styles.partnerToggleDisabled,
+      ]}
+    >
+      {isOpen ? (
+        <View style={styles.partnerToggleContentOpen}>
+          <Text style={styles.partnerToggleTextOpen}>Open</Text>
+          <View style={styles.partnerToggleThumb} />
+        </View>
+      ) : (
+        <View style={styles.partnerToggleContentClose}>
+          <View style={styles.partnerToggleThumb} />
+          <Text style={styles.partnerToggleTextClose}>Close</Text>
+        </View>
+      )}
+    </Pressable>
+  );
+}
+
 function ApprovalNotice({ kind }: { kind: string }) {
   return (
     <View style={styles.approvalNotice}>
@@ -1829,14 +1860,14 @@ function BusinessSalesReportModal({
 }
 
 const styles = StyleSheet.create({
-  app: { flex: 1, backgroundColor: '#fffaf5' },
+  app: { flex: 1, backgroundColor: 'transparent' },
   flex: { flex: 1 },
-  header: { paddingHorizontal: 18, paddingTop: 54, paddingBottom: 14, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f0e8e1', flexDirection: 'row', alignItems: 'center', gap: 8 },
+  header: { paddingHorizontal: 18, paddingTop: 54, paddingBottom: 14, backgroundColor: 'rgba(255, 255, 255, 0.85)', borderBottomWidth: 1.5, borderBottomColor: 'rgba(255, 255, 255, 0.95)', flexDirection: 'row', alignItems: 'center', gap: 8, shadowColor: '#a82c24', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4 },
   brand: { fontSize: 21, color: '#d83a32', fontWeight: '800' },
   role: { color: '#7b7169', fontSize: 12, marginTop: 2 },
-  headerButton: { width: 39, height: 39, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#fff1eb' },
+  headerButton: { width: 39, height: 39, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: 'rgba(255, 241, 235, 0.85)' },
   headerIcon: { color: '#c8322a', fontSize: 22 },
-  headerIconButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff7f5', borderWidth: 1, borderColor: '#fce7e3', alignItems: 'center', justifyContent: 'center' },
+  headerIconButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255, 255, 255, 0.8)', borderWidth: 1.2, borderColor: 'rgba(255, 255, 255, 0.95)', alignItems: 'center', justifyContent: 'center', shadowColor: '#d83a32', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6, elevation: 2 },
   headerRefreshIcon: { color: '#c8322a', fontSize: 18, fontWeight: '700' },
   content: { paddingHorizontal: 17, paddingTop: 20, paddingBottom: 24, flexGrow: 1 },
   errorBanner: { backgroundColor: '#fff1f0', marginHorizontal: 14, marginTop: 9, borderRadius: 11, padding: 10, flexDirection: 'row', alignItems: 'center' },
@@ -1853,7 +1884,81 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   subtitle: { color: '#82786f', fontSize: 13, lineHeight: 19, marginTop: 5, marginBottom: 17 },
-  statusCard: { backgroundColor: '#fff', borderColor: '#eee5dd', borderWidth: 1, borderRadius: 16, padding: 14, flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  headerPartnerStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  headerDigipinText: {
+    color: '#1d4ed8',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  partnerToggleTrack: {
+    width: 44,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 2,
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.12,
+    shadowRadius: 1,
+    elevation: 2,
+  },
+  partnerToggleTrackOpen: {
+    backgroundColor: '#16a34a',
+    borderWidth: 1.2,
+    borderColor: '#15803d',
+  },
+  partnerToggleTrackClose: {
+    backgroundColor: '#dc2626',
+    borderWidth: 1.2,
+    borderColor: '#b91c1c',
+  },
+  partnerToggleDisabled: {
+    opacity: 0.5,
+  },
+  partnerToggleContentOpen: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: 3.5,
+    paddingRight: 1,
+  },
+  partnerToggleContentClose: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: 1,
+    paddingRight: 3.5,
+  },
+  partnerToggleThumb: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1,
+    elevation: 2,
+  },
+  partnerToggleTextOpen: {
+    color: '#ffffff',
+    fontSize: 8.5,
+    fontWeight: '800',
+    letterSpacing: 0.1,
+    textAlign: 'right',
+  },
+  partnerToggleTextClose: {
+    color: '#ffffff',
+    fontSize: 8.5,
+    fontWeight: '800',
+    letterSpacing: 0.1,
+    textAlign: 'right',
+  },
   approvalNotice: { backgroundColor: '#fff7e8', borderColor: '#f2dfbd', borderWidth: 1, borderRadius: 13, padding: 12, marginBottom: 12 },
   approvalTitle: { color: '#8b521c', fontSize: 13, fontWeight: '800' },
   approvalDetail: { color: '#806744', fontSize: 11, lineHeight: 16, marginTop: 4 },
@@ -1861,7 +1966,7 @@ const styles = StyleSheet.create({
   muted: { color: '#82786f', fontSize: 12, lineHeight: 18, marginTop: 3 },
   statsScrollView: { marginBottom: 16 },
   statsScrollContent: { flexDirection: 'row', gap: 8, paddingRight: 4 },
-  statCard: { minWidth: 105, borderRadius: 12, borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 10, paddingVertical: 10, alignItems: 'center', justifyContent: 'center' },
+  statCard: { minWidth: 105, borderRadius: 16, borderWidth: 1.5, borderColor: 'rgba(255, 255, 255, 0.95)', backgroundColor: 'rgba(255, 255, 255, 0.82)', paddingHorizontal: 10, paddingVertical: 10, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, elevation: 2 },
   statCardSelected: { borderWidth: 2, borderColor: '#d83a32' },
   statCardPressable: { minWidth: 105 },
   statValue: { color: '#302923', fontSize: 18, fontWeight: '800' },
@@ -1871,7 +1976,7 @@ const styles = StyleSheet.create({
   resetFilterButton: { marginTop: 12, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, backgroundColor: '#fff0eb', borderWidth: 1, borderColor: '#fcdcd5' },
   resetFilterText: { color: '#d83a32', fontSize: 12, fontWeight: '700' },
   loader: { marginTop: 40 },
-  orderCard: { backgroundColor: '#fff', borderColor: '#eee6df', borderWidth: 1, borderRadius: 16, padding: 14, marginBottom: 11 },
+  orderCard: { backgroundColor: 'rgba(255, 255, 255, 0.85)', borderColor: 'rgba(255, 255, 255, 0.95)', borderWidth: 1.5, borderRadius: 20, padding: 14, marginBottom: 11, shadowColor: '#a82c24', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3 },
   orderHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   orderNumberRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   orderNumber: { color: '#302923', fontWeight: '800', fontSize: 15 },
@@ -1929,9 +2034,9 @@ const styles = StyleSheet.create({
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   smallPrimary: { borderRadius: 11, backgroundColor: '#d83a32', paddingHorizontal: 13, paddingVertical: 10 },
   smallPrimaryText: { color: '#fff', fontWeight: '800', fontSize: 13 },
-  formCard: { backgroundColor: '#fff', borderColor: '#eee5dd', borderWidth: 1, borderRadius: 16, padding: 14, marginBottom: 14 },
+  formCard: { backgroundColor: 'rgba(255, 255, 255, 0.85)', borderColor: 'rgba(255, 255, 255, 0.95)', borderWidth: 1.5, borderRadius: 20, padding: 14, marginBottom: 14, shadowColor: '#a82c24', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3 },
   cardTitle: { color: '#302923', fontSize: 14, fontWeight: '800' },
-  input: { minHeight: 44, backgroundColor: '#fffaf7', borderColor: '#eee3da', borderWidth: 1, borderRadius: 10, paddingHorizontal: 11, color: '#302923', fontSize: 13, marginTop: 9 },
+  input: { minHeight: 44, backgroundColor: 'rgba(255, 255, 255, 0.78)', borderColor: 'rgba(255, 255, 255, 0.95)', borderWidth: 1.2, borderRadius: 14, paddingHorizontal: 12, color: '#302923', fontSize: 13, marginTop: 9 },
   multiline: { minHeight: 72, textAlignVertical: 'top', paddingTop: 11 },
   inputRow: { flexDirection: 'row', gap: 8 },
   halfInput: { flex: 1 },
@@ -2053,24 +2158,24 @@ const styles = StyleSheet.create({
   primaryText: { color: '#fff', fontWeight: '800', fontSize: 13 },
   cancel: { alignItems: 'center', padding: 11 },
   cancelText: { color: '#756b63', fontSize: 12, fontWeight: '700' },
-  itemCard: { backgroundColor: '#fff', borderColor: '#eee6df', borderWidth: 1, borderRadius: 14, padding: 13, marginBottom: 9, flexDirection: 'row', gap: 8, alignItems: 'center' },
+  itemCard: { backgroundColor: 'rgba(255, 255, 255, 0.85)', borderColor: 'rgba(255, 255, 255, 0.95)', borderWidth: 1.5, borderRadius: 16, padding: 13, marginBottom: 9, flexDirection: 'row', gap: 8, alignItems: 'center', shadowColor: '#a82c24', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
   stock: { color: '#27734a', fontSize: 10, fontWeight: '700', marginTop: 5 },
   stockOff: { color: '#927c6d' },
   itemActions: { alignItems: 'flex-end', gap: 8 },
   itemAction: { paddingVertical: 3, paddingHorizontal: 4 },
   linkText: { color: '#c8322a', fontWeight: '700', fontSize: 11 },
   deleteText: { color: '#b42318', fontWeight: '700', fontSize: 12 },
-  empty: { backgroundColor: '#fff', borderColor: '#eee6df', borderWidth: 1, borderRadius: 16, padding: 22, alignItems: 'center', marginTop: 10, gap: 5 },
+  empty: { backgroundColor: 'rgba(255, 255, 255, 0.85)', borderColor: 'rgba(255, 255, 255, 0.95)', borderWidth: 1.5, borderRadius: 18, padding: 22, alignItems: 'center', marginTop: 10, gap: 5 },
   emptyEmoji: { fontSize: 30 },
-  accountCard: { backgroundColor: '#fff', borderColor: '#eee6df', borderWidth: 1, borderRadius: 17, padding: 20, alignItems: 'center', marginVertical: 18 },
+  accountCard: { backgroundColor: 'rgba(255, 255, 255, 0.85)', borderColor: 'rgba(255, 255, 255, 0.95)', borderWidth: 1.5, borderRadius: 22, padding: 20, alignItems: 'center', marginVertical: 18, shadowColor: '#a82c24', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 14, elevation: 4 },
   accountName: { color: '#302923', fontWeight: '800', fontSize: 18, marginBottom: 5 },
   accountRole: { color: '#c8322a', backgroundColor: '#fff0eb', borderRadius: 7, paddingHorizontal: 9, paddingVertical: 6, marginTop: 11, fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
   pendingText: { color: '#9b541f', fontSize: 11, fontWeight: '700', marginTop: 10 },
-  accountAction: { backgroundColor: '#fff', borderColor: '#eee6df', borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 8, flexDirection: 'row', justifyContent: 'space-between' },
+  accountAction: { backgroundColor: 'rgba(255, 255, 255, 0.82)', borderColor: 'rgba(255, 255, 255, 0.92)', borderWidth: 1.2, borderRadius: 14, padding: 14, marginBottom: 8, flexDirection: 'row', justifyContent: 'space-between', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 4, elevation: 1 },
   actionLabel: { color: '#302923', fontWeight: '700', fontSize: 13 },
   chevron: { color: '#91867d', fontSize: 20, marginTop: -4 },
   signOut: { justifyContent: 'center', marginTop: 10 },
-  tabBar: { flexDirection: 'row', backgroundColor: '#fff', borderTopColor: '#eee7e1', borderTopWidth: 1, paddingTop: 8, paddingBottom: Platform.OS === 'android' ? 17 : 7, minHeight: Platform.OS === 'android' ? 76 : 63 },
+  tabBar: { flexDirection: 'row', backgroundColor: 'rgba(255, 255, 255, 0.88)', borderTopColor: 'rgba(255, 255, 255, 0.95)', borderTopWidth: 1.5, paddingTop: 8, paddingBottom: Platform.OS === 'android' ? 17 : 7, minHeight: Platform.OS === 'android' ? 76 : 63, shadowColor: '#a82c24', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.08, shadowRadius: 16, elevation: 8 },
   tabButton: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   tabIcon: { color: '#9a8e84', fontSize: 18, height: 22 },
   tabLabel: { color: '#8d8178', fontSize: 10, fontWeight: '600' },

@@ -223,92 +223,77 @@ export default function GlobalHeader({
     <View style={styles.header}>
       <View style={styles.headerTop}>
         {/* Left Side: Brand and expanding search */}
-        <View style={styles.headerMain}>
-          <View style={styles.brandSearchRow}>
-            {/* Animated Tomato brand */}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Tomato home"
-              onPress={handleBrandPress}
-              style={styles.brandButton}
+        <View style={styles.brandSearchRow}>
+          {/* Animated Tomato brand */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Tomato home"
+            onPress={handleBrandPress}
+            style={styles.brandButton}
+          >
+            <Animated.Text
+              style={[
+                styles.brandEmoji,
+                {
+                  transform: [
+                    { scale: Animated.multiply(pulseAnim, tapScale) },
+                    { rotate: rotateDeg },
+                  ],
+                },
+              ]}
             >
-              <Animated.Text
-                style={[
-                  styles.brandEmoji,
-                  {
-                    transform: [
-                      { scale: Animated.multiply(pulseAnim, tapScale) },
-                      { rotate: rotateDeg },
-                    ],
-                  },
-                ]}
-              >
-                🍅
-              </Animated.Text>
-              <Text style={styles.brandText}>
-                {isSearchActive ? 'T' : 'Tomato'}
-              </Text>
-            </Pressable>
+              🍅
+            </Animated.Text>
+            <Text style={styles.brandText}>
+              {isSearchActive ? 'T' : 'Tomato'}
+            </Text>
+          </Pressable>
 
-            {/* Expanding search while typing / focused */}
-            {showSearch && onSearchChange && (
-              <View style={[styles.searchWrap, isSearchActive && styles.searchWrapExpanded]}>
-                <Text style={styles.searchIcon}>🔍</Text>
-                <TextInput
-                  ref={searchInputRef}
-                  accessibilityLabel="Search"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  numberOfLines={1}
-                  returnKeyType="search"
-                  selectionColor="#d83a32"
-                  value={searchQuery}
-                  placeholder={searchPlaceholder}
-                  placeholderTextColor="#78716c"
-                  style={styles.searchInput}
-                  onFocus={() => {
+          {/* Expanding search while typing / focused */}
+          {showSearch && onSearchChange && (
+            <View style={[styles.searchWrap, isSearchActive && styles.searchWrapExpanded]}>
+              <Text style={styles.searchIcon}>🔍</Text>
+              <TextInput
+                ref={searchInputRef}
+                accessibilityLabel="Search"
+                autoCapitalize="none"
+                autoCorrect={false}
+                numberOfLines={1}
+                returnKeyType="search"
+                selectionColor="#d83a32"
+                value={searchQuery}
+                placeholder={searchPlaceholder}
+                placeholderTextColor="#78716c"
+                style={styles.searchInput}
+                onFocus={() => {
+                  triggerSearchLayout();
+                  setIsFocused(true);
+                }}
+                onBlur={() => {
+                  triggerSearchLayout();
+                  setIsFocused(false);
+                }}
+                onChangeText={(text) => {
+                  if (!isFocused) {
                     triggerSearchLayout();
                     setIsFocused(true);
+                  }
+                  onSearchChange(text);
+                }}
+              />
+              {Boolean(searchQuery) && (
+                <Pressable
+                  hitSlop={8}
+                  onPress={() => {
+                    onSearchChange('');
                   }}
-                  onBlur={() => {
-                    triggerSearchLayout();
-                    setIsFocused(false);
-                  }}
-                  onChangeText={(text) => {
-                    if (!isFocused) {
-                      triggerSearchLayout();
-                      setIsFocused(true);
-                    }
-                    onSearchChange(text);
-                  }}
-                />
-                {Boolean(searchQuery) && (
-                  <Pressable
-                    hitSlop={8}
-                    onPress={() => {
-                      onSearchChange('');
-                    }}
-                    style={styles.searchClearBtn}
-                  >
-                    <Text style={styles.searchClearText}>✕</Text>
-                  </Pressable>
-                )}
-              </View>
-            )}
-          </View>
-
-          {/* Address & Pincode in the header */}
-          <Pressable
-            disabled={!onAddressPress}
-            onPress={onAddressPress}
-            style={[styles.addressRow, !onAddressPress && { opacity: 0.9 }]}
-          >
-            <Text style={styles.locationPin}>📍</Text>
-            <Text numberOfLines={1} style={styles.addressText}>
-              {locationDisplayText}
-            </Text>
-            {Boolean(onAddressPress) && <Text style={styles.dropdownCaret}>▾</Text>}
-          </Pressable>
+                  style={styles.searchClearBtn}
+                >
+                  <Text style={styles.searchClearText}>✕</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
         </View>
 
         {/* Right Side: Notification, custom actions, and Profile Avatar */}
@@ -325,36 +310,50 @@ export default function GlobalHeader({
             </Pressable>
           )}
 
-          {rightActions}
+          {Boolean(rightActions) && rightActions}
 
-          <View style={styles.profileColumn}>
-            {session ? (
-              <ProfileAccess
-                session={session}
-                roleLabel={roleLabel}
-                iconOnly
-                items={profileMenuItems}
-                onNavigate={onNavigateProfile}
-                onSignOut={onSignOut}
-                onSessionUserUpdate={onSessionUserUpdate || (async () => {})}
-              />
-            ) : (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Sign in"
-                onPress={() => (onRequestSignIn ? onRequestSignIn() : onSignOut())}
-                style={styles.signInHeaderBtn}
-              >
-                <Text style={styles.signInHeaderBtnText}>Sign in</Text>
-              </Pressable>
-            )}
-            {Boolean(profileBottomAction) && (
-              <View style={styles.profileBottomWrap}>
-                {profileBottomAction}
-              </View>
-            )}
-          </View>
+          {session ? (
+            <ProfileAccess
+              session={session}
+              roleLabel={roleLabel}
+              iconOnly
+              items={profileMenuItems}
+              onNavigate={onNavigateProfile}
+              onSignOut={onSignOut}
+              onSessionUserUpdate={onSessionUserUpdate || (async () => {})}
+            />
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Sign in"
+              onPress={() => (onRequestSignIn ? onRequestSignIn() : onSignOut())}
+              style={styles.signInHeaderBtn}
+            >
+              <Text style={styles.signInHeaderBtnText}>Sign in</Text>
+            </Pressable>
+          )}
         </View>
+      </View>
+
+      {/* Sub Row: Address on the left, status / toggle on the right */}
+      <View style={styles.headerSubRow}>
+        <Pressable
+          disabled={!onAddressPress}
+          onPress={onAddressPress}
+          style={[styles.addressRow, !onAddressPress && { opacity: 0.9 }]}
+        >
+          <Text style={styles.locationPin}>📍</Text>
+          <Text numberOfLines={1} style={styles.addressText}>
+            {locationDisplayText}
+          </Text>
+          {Boolean(onAddressPress) && <Text style={styles.dropdownCaret}>▾</Text>}
+        </Pressable>
+
+        {Boolean(profileBottomAction) && (
+          <View style={styles.headerSubRowRight}>
+            {profileBottomAction}
+          </View>
+        )}
       </View>
     </View>
   );
@@ -362,16 +361,21 @@ export default function GlobalHeader({
 
 const styles = StyleSheet.create({
   header: {
-    backgroundColor: '#ffffff',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
     paddingHorizontal: 14,
     paddingTop: 52,
     paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1e9e2',
+    borderBottomWidth: 1.5,
+    borderBottomColor: 'rgba(255, 255, 255, 0.95)',
+    shadowColor: '#a82c24',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
   },
   headerTop: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
   },
@@ -380,10 +384,24 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   brandSearchRow: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     minWidth: 0,
+  },
+  headerSubRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    gap: 8,
+  },
+  headerSubRowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexShrink: 0,
   },
   brandButton: {
     flexDirection: 'row',
@@ -406,21 +424,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     height: 38,
-    borderWidth: 1.5,
-    borderColor: '#e7e5e4',
+    borderWidth: 1.2,
+    borderColor: 'rgba(255, 255, 255, 0.92)',
     borderRadius: 19,
-    backgroundColor: '#f5f5f4',
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
     paddingHorizontal: 10,
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    elevation: 1,
   },
   searchWrapExpanded: {
     borderColor: '#d83a32',
-    backgroundColor: '#ffffff',
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
     shadowColor: '#d83a32',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 3,
   },
   searchIcon: {
     fontSize: 12,
@@ -454,10 +477,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   addressRow: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 4,
-    paddingRight: 6,
+    minWidth: 0,
+    paddingRight: 4,
   },
   locationPin: {
     fontSize: 11,
@@ -477,28 +501,32 @@ const styles = StyleSheet.create({
   },
   headerActions: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    alignSelf: 'flex-start',
-    gap: 8,
+    alignItems: 'center',
+    gap: 6,
   },
   profileColumn: {
-    alignItems: 'flex-end',
+    alignItems: 'center',
     justifyContent: 'flex-start',
   },
   profileBottomWrap: {
-    marginTop: 4,
-    alignItems: 'flex-end',
+    marginTop: 3,
+    alignItems: 'center',
   },
   iconButton: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#fff7f5',
-    borderWidth: 1,
-    borderColor: '#fce7e3',
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    borderWidth: 1.2,
+    borderColor: 'rgba(255, 255, 255, 0.95)',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
+    shadowColor: '#d83a32',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
   },
   notificationIcon: {
     fontSize: 18,

@@ -157,9 +157,8 @@ export const OrderCard = React.memo(function OrderCard({
         )}
       </View>
 
-      {/* Row 3: Payment method & status (right) */}
-      <View style={styles.orderStatusRow}>
-        <View style={styles.flex} />
+      {/* Row 3: Payment method & status (left aligned) */}
+      <View style={styles.orderPaymentRow}>
         <Text style={styles.paymentNoteRow}>
           {(() => {
             const isPaid = (order.paymentStatus || '').toLowerCase() === 'paid';
@@ -460,12 +459,17 @@ export const OrderCard = React.memo(function OrderCard({
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   orderCard: {
-    backgroundColor: '#fff',
-    borderColor: '#f0e8e1',
-    borderWidth: 1,
-    borderRadius: 17,
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    borderColor: 'rgba(255, 255, 255, 0.95)',
+    borderWidth: 1.5,
+    borderRadius: 20,
     padding: 15,
     marginBottom: 11,
+    shadowColor: '#a82c24',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
   },
   orderTopRow: {
     flexDirection: 'row',
@@ -517,6 +521,13 @@ const styles = StyleSheet.create({
   orderActionIconEmoji: { fontSize: 14 },
   orderActionIconEmojiDisabled: { opacity: 0.5 },
   paymentNoteRow: { color: '#8a8078', fontSize: 11, fontWeight: '700', letterSpacing: 0.3 },
+  orderPaymentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    marginTop: 4,
+    marginBottom: 4,
+  },
   orderItemsRow: {
     flexDirection: 'row',
     alignItems: 'center',

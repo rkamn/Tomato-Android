@@ -164,6 +164,7 @@ export default function PartnerModules({
   });
   const [createTransferVisible, setCreateTransferVisible] = useState(false);
   const [transferTypeDropdownOpen, setTransferTypeDropdownOpen] = useState(false);
+  const [ledgerExpanded, setLedgerExpanded] = useState(false);
   const [bankForm, setBankForm] = useState({
     accountHolderName: '',
     bankName: '',
@@ -737,17 +738,33 @@ export default function PartnerModules({
                   </>
                 )}
               </View>
-              <Text style={styles.ledgerSectionTitle}>Finance & Transfer Ledger</Text>
-              {transfers.map((transfer, index) => (
-                <View key={String(transfer._id || transfer.id || index)} style={styles.card}>
-                  <Text style={styles.cardTitle}>{money(transfer.amount)} · {transfer.transferType || 'Transfer'}</Text>
-                  <InfoLine label="Purpose" value={String(transfer.purpose || '—')} />
-                  <InfoLine label="Sender" value={`${transfer.senderName || '—'} · ${transfer.senderRole || '—'}`} />
-                  <InfoLine label="Recipient" value={`${transfer.receiverName || '—'} · ${transfer.receiverRole || '—'}`} />
-                  <InfoLine label="Date" value={String(transfer.createdAt || '—')} />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={ledgerExpanded ? 'Contract Finance & Transfer Ledger' : 'Expand Finance & Transfer Ledger'}
+                onPress={() => setLedgerExpanded((prev) => !prev)}
+                style={styles.ledgerHeaderRow}
+              >
+                <Text style={styles.ledgerSectionTitle}>Finance & Transfer Ledger</Text>
+                <View style={[styles.ledgerExpandBadge, ledgerExpanded && styles.ledgerExpandBadgeActive]}>
+                  <Text style={[styles.ledgerExpandSign, ledgerExpanded && styles.ledgerExpandSignActive]}>
+                    {ledgerExpanded ? '−' : '+'}
+                  </Text>
                 </View>
-              ))}
-              {!transfers.length && <Text style={styles.muted}>No finance transfers found.</Text>}
+              </Pressable>
+              {ledgerExpanded && (
+                <>
+                  {transfers.map((transfer, index) => (
+                    <View key={String(transfer._id || transfer.id || index)} style={styles.card}>
+                      <Text style={styles.cardTitle}>{money(transfer.amount)} · {transfer.transferType || 'Transfer'}</Text>
+                      <InfoLine label="Purpose" value={String(transfer.purpose || '—')} />
+                      <InfoLine label="Sender" value={`${transfer.senderName || '—'} · ${transfer.senderRole || '—'}`} />
+                      <InfoLine label="Recipient" value={`${transfer.receiverName || '—'} · ${transfer.receiverRole || '—'}`} />
+                      <InfoLine label="Date" value={String(transfer.createdAt || '—')} />
+                    </View>
+                  ))}
+                  {!transfers.length && <Text style={styles.muted}>No finance transfers found.</Text>}
+                </>
+              )}
             </View>
           )}
           {section === 'account' && (
@@ -997,7 +1014,7 @@ const styles = StyleSheet.create({
   content: { paddingBottom: 24 },
   eyebrow: { color: '#d83a32', fontSize: 10, fontWeight: '800', letterSpacing: 1.2, marginTop: 8 },
   title: { color: '#2d2621', fontSize: 23, fontWeight: '800', marginTop: 4, marginBottom: 10 },
-  card: { backgroundColor: '#fff', borderColor: '#eee5dd', borderWidth: 1, borderRadius: 15, padding: 14, marginBottom: 11 },
+  card: { backgroundColor: 'rgba(255, 255, 255, 0.85)', borderColor: 'rgba(255, 255, 255, 0.95)', borderWidth: 1.5, borderRadius: 20, padding: 14, marginBottom: 11, shadowColor: '#a82c24', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3 },
   cardTitle: { color: '#302923', fontSize: 14, fontWeight: '800', marginBottom: 5 },
   couponCreateHeaderRow: {
     flexDirection: 'row',
@@ -1138,21 +1155,67 @@ const styles = StyleSheet.create({
     backgroundColor: '#f3e8df',
     marginVertical: 4,
   },
+  ledgerHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    borderColor: 'rgba(255, 255, 255, 0.95)',
+    borderWidth: 1.5,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginTop: 10,
+    marginBottom: 8,
+    shadowColor: '#a82c24',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
+  },
   ledgerSectionTitle: {
     fontSize: 15,
     fontWeight: '800',
     color: '#302923',
-    marginTop: 10,
-    marginBottom: 8,
+    flex: 1,
+  },
+  ledgerExpandBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#fff0eb',
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ledgerExpandBadgeActive: {
+    backgroundColor: '#d83a32',
+    borderColor: '#d83a32',
+  },
+  ledgerExpandSign: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#d83a32',
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  ledgerExpandSignActive: {
+    color: '#ffffff',
   },
   flex: { flex: 1 },
   webPanelCard: {
-    backgroundColor: '#fff',
-    borderColor: '#e2e8f0',
-    borderWidth: 1,
-    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    borderColor: 'rgba(255, 255, 255, 0.95)',
+    borderWidth: 1.5,
+    borderRadius: 20,
     padding: 16,
     marginBottom: 16,
+    shadowColor: '#a82c24',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
   },
   webPanelHeader: {
     marginBottom: 14,

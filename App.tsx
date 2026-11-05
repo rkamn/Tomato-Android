@@ -172,6 +172,12 @@ export default function App() {
   return (
     <ErrorBoundary>
       <View style={styles.root}>
+        <View style={styles.ambientBackground} pointerEvents="none">
+          <View style={styles.ambientOrb1} />
+          <View style={styles.ambientOrb2} />
+          <View style={styles.ambientOrb3} />
+          <View style={styles.ambientOrb4} />
+        </View>
         <StatusBar style="dark" />
         {restoring ? (
           <View style={styles.loading}>
@@ -215,7 +221,51 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#fffaf5' },
+  root: { flex: 1, backgroundColor: '#fcfaf7' },
+  ambientBackground: {
+    ...StyleSheet.absoluteFill,
+    overflow: 'hidden',
+  },
+  ambientOrb1: {
+    position: 'absolute',
+    top: -60,
+    left: -50,
+    width: 290,
+    height: 290,
+    borderRadius: 145,
+    backgroundColor: '#ff5c50',
+    opacity: 0.18,
+  },
+  ambientOrb2: {
+    position: 'absolute',
+    top: 90,
+    right: -70,
+    width: 270,
+    height: 270,
+    borderRadius: 135,
+    backgroundColor: '#ffaa55',
+    opacity: 0.22,
+  },
+  ambientOrb3: {
+    position: 'absolute',
+    top: '45%',
+    left: -80,
+    width: 310,
+    height: 310,
+    borderRadius: 155,
+    backgroundColor: '#ff7f73',
+    opacity: 0.15,
+  },
+  ambientOrb4: {
+    position: 'absolute',
+    bottom: -70,
+    right: -50,
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: '#ffa366',
+    opacity: 0.18,
+  },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   errorContainer: {
     flex: 1,

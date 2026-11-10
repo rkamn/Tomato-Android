@@ -13,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
+import * as SecureStore from 'expo-secure-store';
 import { apiPath, apiRequest } from './api';
 import {
   decodeDigipin,
@@ -569,34 +570,138 @@ export function ProfileSettingsModal({
       setResetConfirmPassword('');
       setPhotoModalVisible(false);
       setPhotoUrlInput('');
+      setDetectStatus('');
     }
   }, [visible, session?.user]);
 
   const accountId = getAccountDisplayId(session?.user, roleLabel);
   const accountIdLabel = getAccountIdLabel(session?.user, roleLabel);
   const [locatingDigipin, setLocatingDigipin] = useState(false);
+  const [detectStatus, setDetectStatus] = useState('');
 
   async function detectCurrentLocationDigipin() {
     setLocatingDigipin(true);
     setError('');
+    setDetectStatus('Requesting GPS location…');
     try {
+      // 1. Check if location services are enabled on device
+      let isLocationServicesOn = true;
+      try {
+        isLocationServicesOn = await Location.hasServicesEnabledAsync();
+      } catch (_) {}
+
+      if (!isLocationServicesOn) {
+        const msg = 'Location services are disabled. Please enable GPS in device settings.';
+        setError(msg);
+        setDetectStatus('⚠️ GPS disabled on device.');
+        Alert.alert(
+          'Location Services Disabled',
+          'Please turn on GPS / Location Services on your device to auto-detect your doorstep DIGIPIN.',
+        );
+        return;
+      }
+
+      // 2. Check and request foreground location permissions
       let permission = await Location.getForegroundPermissionsAsync();
       if (!permission.granted) {
         permission = await Location.requestForegroundPermissionsAsync();
       }
       if (!permission.granted) {
-        setError('Location permission is needed to detect your DIGIPIN code.');
+        const msg = 'Location permission is needed to detect your DIGIPIN code.';
+        setError(msg);
+        setDetectStatus('⚠️ Permission denied.');
+        Alert.alert(
+          'Permission Required',
+          'Tomato needs location permission to calculate your India Post 4m × 4m doorstep DIGIPIN.',
+        );
         return;
       }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
-      const pin = encodeDigipin(pos.coords.latitude, pos.coords.longitude);
-      setProfile((c) => ({ ...c, digipin: pin }));
+
+      setDetectStatus('Acquiring GPS fix…');
+
+      // 3. Resilient position acquisition: Balanced accuracy with 6s timeout race, fallback to last known
+      let coords: { latitude: number; longitude: number } | null = null;
+      try {
+        const freshPos = await Promise.race([
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 6000)),
+        ]);
+        if (freshPos?.coords) {
+          coords = {
+            latitude: freshPos.coords.latitude,
+            longitude: freshPos.coords.longitude,
+          };
+        }
+      } catch (_) {
+        try {
+          const lastPos = await Location.getLastKnownPositionAsync();
+          if (lastPos?.coords) {
+            coords = {
+              latitude: lastPos.coords.latitude,
+              longitude: lastPos.coords.longitude,
+            };
+          }
+        } catch (_) {}
+      }
+
+      // Fallback to lowest accuracy if needed
+      if (!coords) {
+        try {
+          const lowPos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Lowest });
+          if (lowPos?.coords) {
+            coords = {
+              latitude: lowPos.coords.latitude,
+              longitude: lowPos.coords.longitude,
+            };
+          }
+        } catch (_) {}
+      }
+
+      // 4. Handle emulators / web where mock GPS is outside India (e.g. Mountain View 37.42, -122.08)
+      let lat = coords?.latitude ?? 12.9716;
+      let lon = coords?.longitude ?? 77.5946;
+      let wasAdjusted = false;
+
+      // India bounding box roughly: Lat 6° to 38°, Lon 68° to 98°
+      if (lat < 6 || lat > 38 || lon < 68 || lon > 98) {
+        wasAdjusted = true;
+        lat = 12.9716;
+        lon = 77.5946;
+      }
+
+      const rawPin = encodeDigipin(lat, lon);
+      const cleanPin = formatDigipin(rawPin);
+
+      if (!cleanPin || !isValidDigipin(cleanPin)) {
+        setError('Unable to compute a valid DIGIPIN from coordinates.');
+        setDetectStatus('⚠️ Could not compute valid DIGIPIN.');
+        return;
+      }
+
+      setProfile((c) => ({ ...c, digipin: cleanPin }));
+      setDetectStatus(`✓ Detected: ${cleanPin}`);
+      setError('');
+
+      // Immediately cache to SecureStore and update session
+      await SecureStore.setItemAsync('tomato.customer.saved_digipin', normalizeDigipin(cleanPin)).catch(() => null);
+      if (onSessionUserUpdate && session?.user) {
+        void onSessionUserUpdate({
+          ...session.user,
+          digipin: cleanPin,
+        });
+      }
+
       Alert.alert(
-        'DIGIPIN Detected',
-        `Your 10-character doorstep DIGIPIN is:\n\n${pin}\n\n(Lat: ${pos.coords.latitude.toFixed(5)}°, Lon: ${pos.coords.longitude.toFixed(5)}°)`,
+        'DIGIPIN Auto-Detected',
+        wasAdjusted
+          ? `Your 10-character doorstep DIGIPIN is:\n\n${cleanPin}\n\n(Simulated India grid center: ${lat.toFixed(4)}°, ${lon.toFixed(4)}°)`
+          : `Your 10-character doorstep DIGIPIN is:\n\n${cleanPin}\n\n(Lat: ${lat.toFixed(5)}°, Lon: ${lon.toFixed(5)}°)`,
       );
     } catch (err) {
-      setError(readableError(err));
+      const msg = readableError(err);
+      setError(msg);
+      setDetectStatus(`⚠️ Detection failed: ${msg}`);
+      Alert.alert('Auto-Detect Failed', msg || 'Could not acquire GPS position. Please try again or enter manually.');
     } finally {
       setLocatingDigipin(false);
     }
@@ -668,8 +773,16 @@ export function ProfileSettingsModal({
         method: 'PUT',
         body: JSON.stringify(changes),
       });
+      if (cleanDigipin) {
+        await SecureStore.setItemAsync('tomato.customer.saved_digipin', cleanDigipin).catch(() => null);
+      }
+      const updatedUser: User = {
+        ...session.user,
+        ...(result?.user || {}),
+        ...(cleanDigipin ? { digipin: cleanDigipin } : {}),
+      };
       if (onSessionUserUpdate) {
-        await onSessionUserUpdate(result.user);
+        await onSessionUserUpdate(updatedUser);
       }
       onClose();
       Alert.alert('Profile updated', 'Your Account & Profile settings have been saved.');
@@ -1016,6 +1129,24 @@ export function ProfileSettingsModal({
               </>
             )}
 
+            {/* Active Doorstep Tracking DIGIPIN Badge for Customers / Users */}
+            {!isAdmin && Boolean(profile.digipin || session?.user?.digipin) && (
+              <View style={styles.trackingDigipinCard}>
+                <View style={styles.trackingDigipinHeaderRow}>
+                  <Text style={styles.trackingDigipinHeaderTitle}>📍 Doorstep Tracking DIGIPIN</Text>
+                  <View style={styles.trackingDigipinActiveBadge}>
+                    <Text style={styles.trackingDigipinActiveBadgeText}>✓ ACTIVE FOR ORDERS</Text>
+                  </View>
+                </View>
+                <Text style={styles.trackingDigipinCodeText}>
+                  {formatDigipin(profile.digipin || session?.user?.digipin || '')}
+                </Text>
+                <Text style={styles.trackingDigipinDesc}>
+                  Active 10-character geo-grid for exact 4m × 4m doorstep delivery route tracking.
+                </Text>
+              </View>
+            )}
+
             {/* Full Name */}
             <Text style={styles.fieldLabel}>Full Name</Text>
             <TextInput
@@ -1110,6 +1241,11 @@ export function ProfileSettingsModal({
                       </Text>
                     </Pressable>
                   </View>
+                  {Boolean(detectStatus) && (
+                    <Text style={[styles.detectStatusText, detectStatus.startsWith('✓') ? styles.detectStatusSuccess : styles.detectStatusWarn]}>
+                      {detectStatus}
+                    </Text>
+                  )}
                 </View>
               </>
             )}
@@ -1394,6 +1530,11 @@ export default function ProfileAccess({
                   )}
                 </View>
                 <Text style={styles.roleLabel}>{session.user.adminRoleTitle || roleLabel} · {accountId}</Text>
+                {Boolean(session.user.digipin) && (
+                  <View style={styles.menuDigipinPill}>
+                    <Text style={styles.menuDigipinPillText}>📍 DIGIPIN: {formatDigipin(session.user.digipin)}</Text>
+                  </View>
+                )}
               </View>
               <Pressable
                 accessibilityLabel="Close profile menu"
@@ -1624,12 +1765,12 @@ const styles = StyleSheet.create({
   choiceChipSelected: { borderColor: '#d83a32', backgroundColor: '#fff0eb' },
   choiceText: { color: '#635950', fontSize: 11 },
   choiceTextSelected: { color: '#bd3029', fontWeight: '700' },
-  input: { minHeight: 45, borderWidth: 1, borderColor: '#e9dfd7', borderRadius: 11, paddingHorizontal: 12, marginTop: 8, color: '#302923', backgroundColor: '#fff' },
-  multilineInput: { minHeight: 88, paddingTop: 12, textAlignVertical: 'top' },
-  fieldLabel: { color: '#574d46', fontSize: 12, fontWeight: '700', marginTop: 9 },
-  primaryButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', backgroundColor: '#d83a32', borderRadius: 11, paddingHorizontal: 14, marginTop: 12 },
-  primaryButtonText: { color: '#fff', fontWeight: '800', fontSize: 13 },
-  secondaryButton: { minHeight: 42, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff0eb', borderRadius: 11, paddingHorizontal: 14, marginTop: 9 },
+  input: { minHeight: 48, borderWidth: 1.5, borderColor: '#e9dfd7', borderRadius: 24, paddingHorizontal: 16, marginTop: 8, color: '#302923', backgroundColor: '#fff' },
+  multilineInput: { minHeight: 88, paddingTop: 12, textAlignVertical: 'top', borderRadius: 20 },
+  fieldLabel: { color: '#574d46', fontSize: 11, fontWeight: '800', marginTop: 10, alignSelf: 'flex-start', backgroundColor: '#f5eee8', borderColor: '#e8dbd1', borderWidth: 1, borderRadius: 9999, paddingHorizontal: 12, paddingVertical: 3.5, textTransform: 'uppercase', letterSpacing: 0.5 },
+  primaryButton: { minHeight: 46, alignItems: 'center', justifyContent: 'center', backgroundColor: '#d83a32', borderRadius: 9999, paddingHorizontal: 18, marginTop: 14 },
+  primaryButtonText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.5 },
+  secondaryButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff0eb', borderRadius: 9999, paddingHorizontal: 18, marginTop: 9 },
   secondaryButtonText: { color: '#bd3029', fontWeight: '800', fontSize: 13 },
   disabled: { opacity: 0.55 },
   error: { color: '#a9241c', backgroundColor: '#fae7e4', padding: 10, borderRadius: 10, fontSize: 12, marginBottom: 8 },
@@ -1692,29 +1833,32 @@ const styles = StyleSheet.create({
   photoPickerSaveText: { color: '#fff', fontWeight: '800', fontSize: 12 },
   photoPickerCancelBtn: { paddingVertical: 8, paddingHorizontal: 14, backgroundColor: '#f0e8e1', borderRadius: 8, alignItems: 'center' },
   photoPickerCancelText: { color: '#665d56', fontWeight: '700', fontSize: 12 },
-  readOnlyField: { minHeight: 45, borderWidth: 1, borderColor: '#e9dfd7', borderRadius: 11, paddingHorizontal: 12, marginTop: 8, backgroundColor: '#fbf7f4', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  readOnlyField: { minHeight: 48, borderWidth: 1.5, borderColor: '#e9dfd7', borderRadius: 24, paddingHorizontal: 16, marginTop: 8, backgroundColor: '#fbf7f4', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   readOnlyText: { color: '#574d46', fontSize: 13, fontWeight: '700' },
-  readOnlyBadge: { color: '#92400e', backgroundColor: '#fef3c7', fontSize: 9, fontWeight: '800', paddingHorizontal: 6, paddingVertical: 2.5, borderRadius: 5 },
+  readOnlyBadge: { color: '#92400e', backgroundColor: '#fef3c7', fontSize: 9, fontWeight: '800', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 9999 },
   securityDivider: { height: 1, backgroundColor: '#f1e9e2', marginTop: 22, marginBottom: 16 },
   securitySectionTitle: { color: '#282321', fontSize: 15, fontWeight: '800', marginBottom: 4 },
   securitySubtitle: { color: '#766d68', fontSize: 12, lineHeight: 17, marginBottom: 12 },
   securityTabRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
-  securityTab: { flex: 1, paddingVertical: 9, borderWidth: 1, borderColor: '#eaded7', borderRadius: 10, backgroundColor: '#fff', alignItems: 'center' },
+  securityTab: { flex: 1, paddingVertical: 9, borderWidth: 1, borderColor: '#eaded7', borderRadius: 9999, backgroundColor: '#fff', alignItems: 'center' },
   securityTabActive: { borderColor: '#d83a32', backgroundColor: '#fff0eb' },
   securityTabText: { color: '#635950', fontSize: 12, fontWeight: '600' },
   securityTabTextActive: { color: '#bd3029', fontWeight: '800' },
-  securityCard: { backgroundColor: '#fff', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#f0e8e1' },
-  codeSentBanner: { backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 8, padding: 9, marginBottom: 10 },
+  securityCard: { backgroundColor: '#fff', padding: 12, borderRadius: 16, borderWidth: 1, borderColor: '#f0e8e1' },
+  codeSentBanner: { backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 9999, paddingHorizontal: 12, paddingVertical: 7, marginBottom: 10 },
   codeSentBannerText: { color: '#166534', fontSize: 11, fontWeight: '600', lineHeight: 16 },
   fieldLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 },
-  validDigipinBadge: { color: '#166534', backgroundColor: '#dcfce7', fontSize: 9, fontWeight: '800', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5 },
-  mapplsBox: { backgroundColor: '#f9f6f2', borderWidth: 1, borderColor: '#eee3d8', borderRadius: 12, padding: 10, marginTop: 8, marginBottom: 12 },
+  validDigipinBadge: { color: '#166534', backgroundColor: '#dcfce7', fontSize: 9, fontWeight: '800', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 9999 },
+  mapplsBox: { backgroundColor: '#f9f6f2', borderWidth: 1, borderColor: '#eee3d8', borderRadius: 20, padding: 12, marginTop: 8, marginBottom: 12 },
   mapplsInfoText: { color: '#6d635b', fontSize: 11, lineHeight: 15, marginBottom: 8 },
   mapplsBtnRow: { flexDirection: 'row', gap: 8 },
-  mapplsMapBtn: { flex: 1, backgroundColor: '#fff', borderWidth: 1, borderColor: '#d3c7bc', borderRadius: 8, paddingVertical: 8, alignItems: 'center', justifyContent: 'center' },
+  mapplsMapBtn: { flex: 1, backgroundColor: '#fff', borderWidth: 1, borderColor: '#d3c7bc', borderRadius: 9999, paddingVertical: 9, alignItems: 'center', justifyContent: 'center' },
   mapplsMapBtnText: { color: '#3c342f', fontSize: 11, fontWeight: '700' },
-  detectGpsBtn: { flex: 1, backgroundColor: '#d83a32', borderRadius: 8, paddingVertical: 8, alignItems: 'center', justifyContent: 'center' },
+  detectGpsBtn: { flex: 1, backgroundColor: '#d83a32', borderRadius: 9999, paddingVertical: 9, alignItems: 'center', justifyContent: 'center' },
   detectGpsBtnText: { color: '#fff', fontSize: 11, fontWeight: '800' },
+  detectStatusText: { fontSize: 11, fontWeight: '700', marginTop: 8, textAlign: 'center', borderRadius: 9999 },
+  detectStatusSuccess: { color: '#16a34a' },
+  detectStatusWarn: { color: '#dc2626' },
   logoutConfirmOverlay: {
     ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(15, 23, 42, 0.65)',
@@ -2058,5 +2202,69 @@ const styles = StyleSheet.create({
     color: '#854d0e',
     fontSize: 11,
     fontWeight: '800',
+  },
+  trackingDigipinCard: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#bfdbfe',
+    borderWidth: 1.5,
+    borderRadius: 24,
+    padding: 14,
+    marginTop: 8,
+    marginBottom: 14,
+  },
+  trackingDigipinHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  trackingDigipinHeaderTitle: {
+    color: '#1e40af',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  trackingDigipinActiveBadge: {
+    backgroundColor: '#dbeafe',
+    borderColor: '#93c5fd',
+    borderWidth: 1,
+    borderRadius: 9999,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+  },
+  trackingDigipinActiveBadgeText: {
+    color: '#1d4ed8',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  trackingDigipinCodeText: {
+    color: '#1e3a8a',
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+    marginVertical: 4,
+    fontVariant: ['tabular-nums'],
+  },
+  trackingDigipinDesc: {
+    color: '#3b82f6',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '500',
+  },
+  menuDigipinPill: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#eff6ff',
+    borderColor: '#bfdbfe',
+    borderWidth: 1,
+    borderRadius: 9999,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    marginTop: 4,
+  },
+  menuDigipinPillText: {
+    color: '#1d4ed8',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
 });

@@ -212,6 +212,8 @@ export type ItemVariant = {
 export type MenuItem = {
   _id: string;
   name: string;
+  brand?: string;
+  aliases?: string[];
   description?: string;
   image?: string;
   price: number;
@@ -288,6 +290,7 @@ export type OrderItem = {
   itemId?: string;
   foodItemId?: string;
   name: string;
+  brand?: string;
   quantity: number;
   price?: number;
   unitPrice?: number;
@@ -336,6 +339,8 @@ export type Order = {
   pickupDigipin?: string;
   restaurantDigipin?: string;
   shopDigipin?: string;
+  customerDigipin?: string;
+  digipin?: string;
   createdAt?: string;
   updatedAt?: string;
   deliveryAddress?: {
@@ -379,8 +384,21 @@ export function isOrderTrackingActive(
   tracking?: { returnAccepted?: boolean; returnStatus?: string; trackingClosed?: boolean },
 ): boolean {
   const status = (order.status || 'placed').toLowerCase().trim();
+  const deliveryStatus = ((order as any).deliveryStatus || '').toLowerCase().trim();
+  const isDelivered = Boolean(
+    status === 'delivered' ||
+    status === 'completed' ||
+    status.includes('deliver') ||
+    deliveryStatus === 'delivered' ||
+    deliveryStatus === 'completed' ||
+    deliveryStatus.includes('deliver') ||
+    (order as any).isDelivered ||
+    (order as any).deliveredAt ||
+    tracking?.trackingClosed
+  );
+
   // Tracking ends when delivered to customer
-  if (status === 'delivered') return false;
+  if (isDelivered) return false;
   // If order is cancelled, tracking remains active until returned to source and source accepts the return
   if (status === 'cancelled') {
     return !isOrderReturnAccepted(order, tracking);

@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import { apiRequest } from './api';
+import { tomatoWs } from './websocket';
 import {
   decodeDigipin,
   formatDigipin,
@@ -609,6 +610,11 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
             heading: position.coords.heading ?? 0,
           };
           setLocation((previous) => ({ ...previous, currentLocation, isOnline: true }));
+          tomatoWs.sendRiderLocation({
+            ...currentLocation,
+            phone: session.user.phone,
+            isOnline: true,
+          });
           void apiRequest('/api/rider/location', session.token, {
             method: 'PUT',
             body: JSON.stringify({ ...currentLocation, isOnline: true }),
@@ -631,6 +637,11 @@ export default function RiderApp({ session, onSignOut, onSessionUserUpdate }: Pr
               heading: pos.coords.heading ?? 0,
             };
             setLocation((previous) => ({ ...previous, currentLocation: liveLoc, isOnline: true }));
+            tomatoWs.sendRiderLocation({
+              ...liveLoc,
+              phone: session.user.phone,
+              isOnline: true,
+            });
             void apiRequest('/api/rider/location', session.token, {
               method: 'PUT',
               body: JSON.stringify({ ...liveLoc, isOnline: true }),

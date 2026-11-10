@@ -107,6 +107,7 @@ export default function AdminControlPanel({
     permissions: ['dashboard_view'],
   });
   const [editingRoleId, setEditingRoleId] = useState('');
+  const [createRoleExpanded, setCreateRoleExpanded] = useState(false);
   const [supportDraft, setSupportDraft] = useState({ priorityEmail: '', helpline: '' });
   const [proxyDraft, setProxyDraft] = useState({ enabled: false, gatewayPort: '', backendPort: '' });
   const [locationTarget, setLocationTarget] = useState('');
@@ -229,6 +230,7 @@ export default function AdminControlPanel({
       description: role.description || '',
       permissions: role.permissions || [],
     });
+    setCreateRoleExpanded(true);
     setSection('roles');
   }
 
@@ -253,6 +255,7 @@ export default function AdminControlPanel({
       );
       setEditingRoleId('');
       setRoleDraft({ displayName: '', roleKey: '', description: '', permissions: ['dashboard_view'] });
+      setCreateRoleExpanded(false);
       await load();
     });
   }
@@ -510,6 +513,53 @@ export default function AdminControlPanel({
           )}
           {section === 'roles' && (
             <View>
+              {isSuperAdminOrAdmin ? (
+                <View style={styles.card}>
+                  <View style={styles.cardHeaderRow}>
+                    <Text style={styles.cardTitle}>{editingRoleId ? 'Edit custom role' : 'Create custom role'}</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={createRoleExpanded ? 'Contract role form' : 'Expand role form'}
+                      style={styles.expandCollapseBtn}
+                      onPress={() => setCreateRoleExpanded((prev) => !prev)}
+                    >
+                      <Text style={styles.expandCollapseBtnText}>{createRoleExpanded ? '−' : '+'}</Text>
+                    </Pressable>
+                  </View>
+                  {createRoleExpanded && (
+                    <View style={styles.formBody}>
+                      <TextInput style={styles.input} placeholder="Display name" value={roleDraft.displayName} onChangeText={(value) => setRoleDraft((current) => ({ ...current, displayName: value }))} />
+                      {!editingRoleId && <TextInput style={styles.input} placeholder="Role key (optional)" autoCapitalize="none" value={roleDraft.roleKey} onChangeText={(value) => setRoleDraft((current) => ({ ...current, roleKey: value }))} />}
+                      <TextInput style={styles.input} placeholder="Description" value={roleDraft.description} onChangeText={(value) => setRoleDraft((current) => ({ ...current, description: value }))} />
+                      <Text style={styles.fieldLabel}>Permissions</Text>
+                      <View style={styles.actions}>
+                        {permissionOptions.map(([value, title]) => (
+                          <Pressable key={value} style={[styles.permission, roleDraft.permissions.includes(value) && styles.permissionActive]} onPress={() => togglePermission(value)}>
+                            <Text style={[styles.permissionText, roleDraft.permissions.includes(value) && styles.permissionTextActive]}>{title}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                      <Pressable disabled={busy === 'save-role'} style={styles.primaryButton} onPress={() => void saveRole()}>
+                        <Text style={styles.primaryText}>{busy === 'save-role' ? 'Saving…' : editingRoleId ? 'Save role' : 'Create role'}</Text>
+                      </Pressable>
+                      {!!editingRoleId && (
+                        <Pressable style={styles.secondaryButton} onPress={() => {
+                          setEditingRoleId('');
+                          setRoleDraft({ displayName: '', roleKey: '', description: '', permissions: ['dashboard_view'] });
+                          setCreateRoleExpanded(false);
+                        }}>
+                          <Text style={styles.secondaryText}>Cancel edit</Text>
+                        </Pressable>
+                      )}
+                    </View>
+                  )}
+                </View>
+              ) : (
+                <View style={styles.card}>
+                  <Text style={styles.cardTitle}>Delegated Permissions & Roles</Text>
+                  <Text style={styles.muted}>Role creation and modification are reserved for platform administrators.</Text>
+                </View>
+              )}
               {roles.map((role) => {
                 const id = role.id || role._id || '';
                 return (
@@ -530,34 +580,6 @@ export default function AdminControlPanel({
                   </View>
                 );
               })}
-              {isSuperAdminOrAdmin ? (
-                <View style={styles.card}>
-                  <Text style={styles.cardTitle}>{editingRoleId ? 'Edit custom role' : 'Create custom role'}</Text>
-                  <TextInput style={styles.input} placeholder="Display name" value={roleDraft.displayName} onChangeText={(value) => setRoleDraft((current) => ({ ...current, displayName: value }))} />
-                  {!editingRoleId && <TextInput style={styles.input} placeholder="Role key (optional)" autoCapitalize="none" value={roleDraft.roleKey} onChangeText={(value) => setRoleDraft((current) => ({ ...current, roleKey: value }))} />}
-                  <TextInput style={styles.input} placeholder="Description" value={roleDraft.description} onChangeText={(value) => setRoleDraft((current) => ({ ...current, description: value }))} />
-                  <Text style={styles.fieldLabel}>Permissions</Text>
-                  <View style={styles.actions}>
-                    {permissionOptions.map(([value, title]) => (
-                      <Pressable key={value} style={[styles.permission, roleDraft.permissions.includes(value) && styles.permissionActive]} onPress={() => togglePermission(value)}>
-                        <Text style={[styles.permissionText, roleDraft.permissions.includes(value) && styles.permissionTextActive]}>{title}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                  <Pressable disabled={busy === 'save-role'} style={styles.primaryButton} onPress={() => void saveRole()}>
-                    <Text style={styles.primaryText}>{busy === 'save-role' ? 'Saving…' : editingRoleId ? 'Save role' : 'Create role'}</Text>
-                  </Pressable>
-                  {!!editingRoleId && <Pressable style={styles.secondaryButton} onPress={() => {
-                    setEditingRoleId('');
-                    setRoleDraft({ displayName: '', roleKey: '', description: '', permissions: ['dashboard_view'] });
-                  }}><Text style={styles.secondaryText}>Cancel edit</Text></Pressable>}
-                </View>
-              ) : (
-                <View style={styles.card}>
-                  <Text style={styles.cardTitle}>Delegated Permissions & Roles</Text>
-                  <Text style={styles.muted}>Role creation and modification are reserved for platform administrators.</Text>
-                </View>
-              )}
             </View>
           )}
           {section === 'support' && (
@@ -646,4 +668,32 @@ const styles = StyleSheet.create({
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
   error: { color: '#a9241c', backgroundColor: '#fae7e4', padding: 10, borderRadius: 9, marginBottom: 8 },
   loader: { marginTop: 25 },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+  },
+  expandCollapseBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#d83a32',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#d83a32',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  expandCollapseBtnText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  formBody: {
+    marginTop: 4,
+  },
 });

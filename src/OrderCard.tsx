@@ -42,6 +42,7 @@ export type OrderCardProps = {
   onViewBill: () => void;
   onReview: (item: { id: string; name: string; rating?: number }) => void;
   sessionToken?: string;
+  customerProfileDigipin?: string;
 };
 
 export const OrderCard = React.memo(function OrderCard({
@@ -55,8 +56,37 @@ export const OrderCard = React.memo(function OrderCard({
   onViewBill,
   onReview,
   sessionToken,
+  customerProfileDigipin,
 }: OrderCardProps) {
-  const isShopOrder = Boolean(order.isShopOrder || order.shopId || order.shopName);
+  const effectiveCustomerDigipin =
+    resolveCustomerDigipin(order) ||
+    order.deliveryAddress?.digipin ||
+    (order as any).customerDigipin ||
+    (order as any).digipin ||
+    customerProfileDigipin ||
+    '';
+
+  const isShopOrder = Boolean(
+    order.isShopOrder ||
+    (order as any).isShop ||
+    (order as any).storeType === 'shop' ||
+    (order as any).orderType === 'shop' ||
+    (order as any).type === 'shop' ||
+    order.shopId ||
+    order.shopName ||
+    order.shopAddress ||
+    order.shopDigipin ||
+    (order.orderNumber && String(order.orderNumber).toUpperCase().includes('SHOP')) ||
+    (order as any).restaurantId?.toLowerCase?.()?.startsWith('shop') ||
+    (order as any).restaurantId?.toLowerCase?.()?.startsWith('sh-') ||
+    order.restaurantName?.toLowerCase()?.includes('shop') ||
+    (tracking as any)?.isShopOrder ||
+    (tracking as any)?.isShop ||
+    (tracking as any)?.storeType === 'shop' ||
+    (tracking as any)?.restaurant?.restaurantId?.toLowerCase?.()?.startsWith('shop') ||
+    (tracking as any)?.restaurant?.name?.toLowerCase?.()?.includes('shop') ||
+    order.items?.some((it: any) => it.isShop || it.storeType === 'shop' || it.category?.toLowerCase()?.includes('shop'))
+  );
   const partner =
     order.shopName || order.restaurantName || (isShopOrder ? 'Tomato shop' : 'Tomato restaurant');
   const normalizedStatus = (order.status || 'placed').toLowerCase().trim();
@@ -193,7 +223,7 @@ export const OrderCard = React.memo(function OrderCard({
       {!!order.items?.length && (
         <View style={styles.orderItemsRow}>
           <Text style={[styles.orderItems, styles.flex]} numberOfLines={2}>
-            {order.items.map((item) => `${item.name}(${item.quantity ?? 1})`).join(', ')}
+            {order.items.map((item) => `${item.name}${item.brand ? ` (${item.brand})` : ''}(${item.quantity ?? 1})`).join(', ')}
           </Text>
           {isDelivered && (
             <Pressable
@@ -216,8 +246,8 @@ export const OrderCard = React.memo(function OrderCard({
         <View style={styles.orderDeliveryRow}>
           <Text style={[styles.itemDescription, styles.flex]} numberOfLines={2}>
             {order.deliveryAddress.label || 'Delivery'} · {order.deliveryAddress.line1}
-            {order.deliveryAddress.digipin
-              ? ` (DIGIPIN: ${formatDigipin(order.deliveryAddress.digipin)})`
+            {effectiveCustomerDigipin
+              ? ` (DIGIPIN: ${formatDigipin(effectiveCustomerDigipin)})`
               : ''}
           </Text>
           {isDelivered && (
@@ -413,7 +443,7 @@ export const OrderCard = React.memo(function OrderCard({
                       fallbackCustomerName={order.customerName}
                       fallbackCustomerAddress={order.deliveryAddress}
                       fallbackCustomerDigipin={
-                        resolveCustomerDigipin(order) || order.deliveryAddress?.digipin
+                        effectiveCustomerDigipin || resolveCustomerDigipin(order) || order.deliveryAddress?.digipin
                       }
                       fallbackStoreName={partner}
                       fallbackStoreDigipin={

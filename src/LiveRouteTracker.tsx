@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { apiRequest } from './api';
 import { decodeDigipin, formatDigipin, resolveCustomerDigipin } from './digipin';
+import { tomatoWs } from './websocket';
 
 export type LiveTrackingData = {
   orderId?: string;
@@ -120,6 +121,19 @@ export type LiveRouteTrackerProps = {
   isPickedUp?: boolean;
 };
 
+function isTrackingDelivered(data?: LiveTrackingData | null): boolean {
+  if (!data) return false;
+  const s = String(data.status || '').toLowerCase().trim();
+  return Boolean(
+    data.trackingClosed ||
+    s === 'delivered' ||
+    s === 'completed' ||
+    s.includes('deliver') ||
+    (data as any).isDelivered ||
+    (data as any).deliveredAt
+  );
+}
+
 export default function LiveRouteTracker({
   orderId,
   orderNumber,
@@ -150,6 +164,10 @@ export default function LiveRouteTracker({
     try {
       const res = await apiRequest<{ tracking?: LiveTrackingData }>(endpoint, token);
       if (res?.tracking) {
+        if (isTrackingDelivered(res.tracking)) {
+          onClose?.();
+          return;
+        }
         setTracking(res.tracking);
         setError('');
       }
@@ -173,12 +191,32 @@ export default function LiveRouteTracker({
     if (!endpoint || !token) return;
     void loadTracking();
 
-    // Auto-poll coordinates every 12 seconds while tracker is open
+    // Subscribe to live WebSocket tracking for instant push updates
+    let unsubscribeWs: (() => void) | null = null;
+    if (orderId) {
+      if (token) tomatoWs.connect(token);
+      unsubscribeWs = tomatoWs.subscribeOrder(orderId, (realtimeTracking) => {
+        if (realtimeTracking) {
+          if (isTrackingDelivered(realtimeTracking)) {
+            onClose?.();
+            return;
+          }
+          setTracking(realtimeTracking);
+          setError('');
+          setLoading(false);
+        }
+      });
+    }
+
+    // Auto-poll coordinates every 15 seconds as a network backup while tracker is open
     const interval = setInterval(() => {
       void loadTracking();
-    }, 12000);
+    }, 15000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (unsubscribeWs) unsubscribeWs();
+    };
   }, [endpoint, token, orderId]);
 
   // Resolve Rider Data
@@ -200,9 +238,9 @@ export default function LiveRouteTracker({
     ? `${custAddr.line1}${custAddr.line2 ? `, ${custAddr.line2}` : ''}${custAddr.city ? `, ${custAddr.city}` : ''}`
     : 'Customer Delivery Address';
   const custDigipin =
+    (fallbackCustomerDigipin ? resolveCustomerDigipin(fallbackCustomerDigipin) : '') ||
     resolveCustomerDigipin(customer) ||
     resolveCustomerDigipin(custAddr) ||
-    (fallbackCustomerDigipin ? resolveCustomerDigipin(fallbackCustomerDigipin) : '') ||
     String(customer?.digipin || custAddr?.digipin || fallbackCustomerAddress?.digipin || '');
   const custPincode = String(customer?.pincode || custAddr?.postalCode || '');
 
@@ -216,9 +254,29 @@ export default function LiveRouteTracker({
   const custLat = decodedCustLocation?.lat ?? parseCoord(custLocation?.lat ?? fallbackCustLat, 12.9815);
   const custLng = decodedCustLocation?.lng ?? parseCoord(custLocation?.lng ?? fallbackCustLng, 77.6095);
 
+  // Robustly determine if this is a Shop order vs Restaurant order
+  const effectiveIsShop = Boolean(
+    isShop ||
+    (orderNumber && String(orderNumber).toUpperCase().includes('SHOP')) ||
+    (orderId && String(orderId).toUpperCase().includes('SHOP')) ||
+    (tracking as any)?.isShopOrder ||
+    (tracking as any)?.isShop ||
+    (tracking as any)?.storeType === 'shop' ||
+    (tracking as any)?.orderType === 'shop' ||
+    (tracking?.restaurant as any)?.isShop ||
+    (tracking?.restaurant as any)?.storeType === 'shop' ||
+    tracking?.restaurant?.restaurantId?.toLowerCase?.()?.startsWith('shop') ||
+    tracking?.restaurant?.restaurantId?.toLowerCase?.()?.startsWith('sh-') ||
+    fallbackStoreName?.toLowerCase?.()?.includes('shop') ||
+    tracking?.restaurant?.name?.toLowerCase?.()?.includes('shop') ||
+    tracking?.restaurant?.displayName?.toLowerCase?.()?.includes('shop') ||
+    fallbackStoreAddress?.toLowerCase?.()?.includes('shop') ||
+    tracking?.restaurant?.address?.toLowerCase?.()?.includes('shop')
+  );
+
   // Resolve Restaurant / Shop Data
   const store = tracking?.restaurant;
-  const storeName = String(store?.displayName || store?.name || fallbackStoreName || (isShop ? 'Shop' : 'Restaurant'));
+  const storeName = String(store?.displayName || store?.name || fallbackStoreName || (effectiveIsShop ? 'Shop' : 'Restaurant'));
   const storeDigipin = String(store?.digipin || fallbackStoreDigipin || '');
   const decodedStoreLocation = decodeDigipin(storeDigipin);
   const storeAddress = String(store?.address || fallbackStoreAddress || '');
@@ -304,6 +362,16 @@ export default function LiveRouteTracker({
     });
   }
 
+  useEffect(() => {
+    if (isTrackingDelivered(tracking) || isTrackingDelivered(initialTracking)) {
+      onClose?.();
+    }
+  }, [tracking, initialTracking, onClose]);
+
+  if (isTrackingDelivered(tracking) || isTrackingDelivered(initialTracking)) {
+    return null;
+  }
+
   return (
     <View style={styles.container}>
       {/* Tracker Header */}
@@ -347,7 +415,7 @@ export default function LiveRouteTracker({
         <Text style={[styles.stageText, isPickedUp ? styles.stageTextPickedUp : styles.stageTextEnRoute]}>
           {isPickedUp
             ? 'Order Picked Up · En route to customer delivery location'
-            : `Rider accepted · Heading to ${isShop ? 'shop' : 'restaurant'} for pickup`}
+            : `Rider accepted · Heading to ${effectiveIsShop ? 'shop' : 'restaurant'} for pickup`}
         </Text>
       </View>
 
@@ -355,11 +423,11 @@ export default function LiveRouteTracker({
       <View style={styles.kpiRow}>
         <View style={styles.kpiCard}>
           <Text style={styles.kpiLabel}>
-            {isPickedUp ? 'DISTANCE TO CUSTOMER' : `DISTANCE TO ${isShop ? 'SHOP' : 'RESTAURANT'}`}
+            {isPickedUp ? 'DISTANCE TO CUSTOMER' : `DISTANCE TO ${effectiveIsShop ? 'SHOP' : 'RESTAURANT'}`}
           </Text>
           <Text style={styles.kpiValueMain}>~{activeDist} km</Text>
           <Text style={styles.kpiFoot}>
-            {isPickedUp ? 'Rider ➔ Customer' : `Rider ➔ ${isShop ? 'Shop' : 'Restaurant'}`}
+            {isPickedUp ? 'Rider ➔ Customer' : `Rider ➔ ${effectiveIsShop ? 'Shop' : 'Restaurant'}`}
           </Text>
         </View>
 
@@ -369,7 +437,7 @@ export default function LiveRouteTracker({
           </Text>
           <Text style={[styles.kpiValueMain, styles.kpiValueHighlight]}>~{activeMinutes} mins</Text>
           <Text style={[styles.kpiFoot, styles.kpiFootHighlight]}>
-            {isPickedUp ? 'Approx. delivery time' : 'Approx. pickup arrival'}
+            {isPickedUp ? 'Approx. delivery time' : `Approx. ${effectiveIsShop ? 'shop' : 'restaurant'} arrival`}
           </Text>
         </View>
 
@@ -387,10 +455,10 @@ export default function LiveRouteTracker({
         {/* Radar Header */}
         <View style={styles.radarHeader}>
           <Text style={styles.radarHeaderTitle}>
-            {isPickedUp ? '📡 DISPATCH RADAR · TO CUSTOMER' : `📡 DISPATCH RADAR · TO ${isShop ? 'SHOP' : 'RESTAURANT'}`}
+            {isPickedUp ? '📡 DISPATCH RADAR · TO CUSTOMER' : `📡 DISPATCH RADAR · TO ${effectiveIsShop ? 'SHOP' : 'RESTAURANT'}`}
           </Text>
           <Text style={styles.radarHeaderGps}>
-            {isOnline ? '🟢 LIVE GPS STREAM ACTIVE' : '🟡 SIGNAL STANDBY'}
+            {isOnline ? '🟢 LIVE WEBSOCKET GPS STREAM' : '🟡 SIGNAL STANDBY'}
           </Text>
         </View>
 
@@ -416,7 +484,7 @@ export default function LiveRouteTracker({
               </Text>
             </View>
             <Text style={styles.highlightedPathSub}>
-              {isPickedUp ? 'HIGHLIGHTED ROUTE TO CUSTOMER' : `HIGHLIGHTED ROUTE TO ${isShop ? 'SHOP' : 'RESTAURANT'}`}
+              {isPickedUp ? 'HIGHLIGHTED ROUTE TO CUSTOMER' : `HIGHLIGHTED ROUTE TO ${effectiveIsShop ? 'SHOP' : 'RESTAURANT'}`}
             </Text>
           </View>
 
@@ -429,7 +497,7 @@ export default function LiveRouteTracker({
               {isPickedUp ? custName : storeName}
             </Text>
             <Text style={styles.waypointRole}>
-              {isPickedUp ? 'Customer Delivery' : `${isShop ? 'Shop' : 'Restaurant'} Pickup`}
+              {isPickedUp ? 'Customer Delivery' : `${effectiveIsShop ? 'Shop' : 'Restaurant'} Pickup`}
             </Text>
             {Boolean(isPickedUp ? custDigipin : storeDigipin) && (
               <Text style={styles.waypointDigipin}>
@@ -446,7 +514,7 @@ export default function LiveRouteTracker({
           </Text>
           <Text style={styles.coordinatesDivider}>•</Text>
           <Text style={styles.coordinatesText}>
-            {isPickedUp ? '🏠 Customer: ' : `🏪 ${isShop ? 'Shop: ' : 'Restaurant: '}`}
+            {isPickedUp ? '🏠 Customer: ' : `🏪 ${effectiveIsShop ? 'Shop: ' : 'Restaurant: '}`}
             <Text style={styles.coordinatesMono}>{(Number(activeDestLat) || 0).toFixed(4)}, {(Number(activeDestLng) || 0).toFixed(4)}</Text>
           </Text>
         </View>
@@ -482,7 +550,7 @@ export default function LiveRouteTracker({
         <View style={styles.detailCard}>
           <View style={styles.detailCardHeader}>
             <Text style={styles.detailCardTitle}>
-              {isPickedUp ? '🏠 Delivery Address' : `🏪 ${isShop ? 'Shop' : 'Restaurant'} Pickup`}
+              {isPickedUp ? '🏠 Delivery Address' : `🏪 ${effectiveIsShop ? 'Shop' : 'Restaurant'} Pickup`}
             </Text>
             {Boolean(isPickedUp ? custDigipin : storeDigipin) && (
               <Text style={styles.digipinPill}>
@@ -517,7 +585,7 @@ export default function LiveRouteTracker({
             🗺️ View Highlighted Path in Google Maps
           </Text>
           <Text style={styles.googleMapsBtnSub}>
-            Turn-by-turn live navigation to {isPickedUp ? 'Customer' : (isShop ? 'Shop' : 'Restaurant')} (~{activeDist} km · ~{activeMinutes} mins)
+            Turn-by-turn live navigation to {isPickedUp ? 'Customer' : (effectiveIsShop ? 'Shop' : 'Restaurant')} (~{activeDist} km · ~{activeMinutes} mins)
           </Text>
         </Pressable>
       </View>

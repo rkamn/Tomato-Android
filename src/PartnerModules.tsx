@@ -76,6 +76,60 @@ function readableError(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
 }
 
+function parseCouponDate(val: string, isEndOfDay = false): string | undefined {
+  const str = val.trim();
+  if (!str) return undefined;
+  const dmy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (dmy) {
+    const d = parseInt(dmy[1], 10);
+    const m = parseInt(dmy[2], 10) - 1;
+    const y = parseInt(dmy[3], 10);
+    const dt = isEndOfDay ? new Date(Date.UTC(y, m, d, 23, 59, 59, 999)) : new Date(Date.UTC(y, m, d, 0, 0, 0, 0));
+    return isNaN(dt.getTime()) ? undefined : dt.toISOString();
+  }
+  const ymd = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (ymd) {
+    const y = parseInt(ymd[1], 10);
+    const m = parseInt(ymd[2], 10) - 1;
+    const d = parseInt(ymd[3], 10);
+    const dt = isEndOfDay ? new Date(Date.UTC(y, m, d, 23, 59, 59, 999)) : new Date(Date.UTC(y, m, d, 0, 0, 0, 0));
+    return isNaN(dt.getTime()) ? undefined : dt.toISOString();
+  }
+  const parsed = Date.parse(str);
+  if (!Number.isNaN(parsed)) {
+    return new Date(parsed).toISOString();
+  }
+  return undefined;
+}
+
+function applyDateMask(nextText: string, prevText: string): string {
+  if (prevText && nextText.length < prevText.length) {
+    if (prevText.endsWith('/') && nextText.endsWith('/')) {
+      return nextText.slice(0, -1);
+    }
+    return nextText;
+  }
+  const digits = nextText.replace(/\D/g, '').slice(0, 8);
+  if (!digits) return '';
+  if (digits.length === 1) return digits;
+  if (digits.length === 2) return `${digits}/`;
+  if (digits.length === 3) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  if (digits.length === 4) return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+function isoToDmy(isoVal: unknown): string {
+  if (!isoVal) return '';
+  const str = String(isoVal).trim();
+  if (!str) return '';
+  const d = new Date(str);
+  if (isNaN(d.getTime())) return str;
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const year = d.getUTCFullYear();
+  return `${day}/${month}/${year}`;
+}
+
 function money(value: unknown): string {
   const amount = Number(value);
   return Number.isFinite(amount) ? `₹${amount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : '—';
@@ -343,8 +397,8 @@ export default function PartnerModules({
       occasionName: coupon.occasionName || '',
       usageLimitPerUser: String(coupon.usageLimitPerUser ?? ''),
       totalUsageLimit: String(coupon.totalUsageLimit ?? ''),
-      validFrom: coupon.validFrom || '',
-      validUntil: coupon.validUntil || '',
+      validFrom: isoToDmy(coupon.validFrom),
+      validUntil: isoToDmy(coupon.validUntil),
     });
   }
 
@@ -373,11 +427,14 @@ export default function PartnerModules({
       setError('Coupon usage limits must be whole numbers.');
       return;
     }
-    if (
-      (couponForm.validFrom && Number.isNaN(Date.parse(couponForm.validFrom)))
-      || (couponForm.validUntil && Number.isNaN(Date.parse(couponForm.validUntil)))
-    ) {
-      setError('Enter valid coupon dates in ISO date format.');
+    const isoValidFrom = couponForm.validFrom.trim() ? parseCouponDate(couponForm.validFrom, false) : undefined;
+    if (couponForm.validFrom.trim() && !isoValidFrom) {
+      setError('Valid from date is invalid. Use YYYY-MM-DD or DD-MM-YYYY format.');
+      return;
+    }
+    const isoValidUntil = couponForm.validUntil.trim() ? parseCouponDate(couponForm.validUntil, true) : undefined;
+    if (couponForm.validUntil.trim() && !isoValidUntil) {
+      setError('Valid until date is invalid. Use YYYY-MM-DD or DD-MM-YYYY format.');
       return;
     }
     await runAction('coupon', async () => {
@@ -393,8 +450,8 @@ export default function PartnerModules({
         ...(couponForm.occasionName.trim() ? { occasionName: couponForm.occasionName.trim() } : {}),
         ...(couponForm.usageLimitPerUser ? { usageLimitPerUser: Number(couponForm.usageLimitPerUser) } : {}),
         ...(couponForm.totalUsageLimit ? { totalUsageLimit: Number(couponForm.totalUsageLimit) } : {}),
-        ...(couponForm.validFrom ? { validFrom: couponForm.validFrom } : {}),
-        ...(couponForm.validUntil ? { validUntil: couponForm.validUntil } : {}),
+        ...(isoValidFrom ? { validFrom: isoValidFrom } : {}),
+        ...(isoValidUntil ? { validUntil: isoValidUntil } : {}),
       };
       await apiRequest(
         editingCouponId ? `${apiBase}/coupons/${encodeURIComponent(editingCouponId)}` : `${apiBase}/coupons`,
@@ -549,10 +606,22 @@ export default function PartnerModules({
                     <TextInput style={styles.input} placeholder="Occasion name (optional)" value={couponForm.occasionName} onChangeText={(value) => setCouponForm((current) => ({ ...current, occasionName: value }))} />
                     <TextInput style={styles.input} placeholder="Per-user usage limit (optional)" keyboardType="number-pad" value={couponForm.usageLimitPerUser} onChangeText={(value) => setCouponForm((current) => ({ ...current, usageLimitPerUser: value }))} />
                     <TextInput style={styles.input} placeholder="Total usage limit (optional)" keyboardType="number-pad" value={couponForm.totalUsageLimit} onChangeText={(value) => setCouponForm((current) => ({ ...current, totalUsageLimit: value }))} />
-                    <TextInput style={styles.input} placeholder="Valid from (ISO date)" value={couponForm.validFrom} onChangeText={(value) => setCouponForm((current) => ({ ...current, validFrom: value }))} />
-                    <TextInput style={styles.input} placeholder="Valid until (ISO date)" value={couponForm.validUntil} onChangeText={(value) => setCouponForm((current) => ({ ...current, validUntil: value }))} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Valid from (DD/MM/YYYY, optional)"
+                      keyboardType="numbers-and-punctuation"
+                      value={couponForm.validFrom}
+                      onChangeText={(value) => setCouponForm((current) => ({ ...current, validFrom: applyDateMask(value, current.validFrom) }))}
+                    />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Valid until (DD/MM/YYYY, optional)"
+                      keyboardType="numbers-and-punctuation"
+                      value={couponForm.validUntil}
+                      onChangeText={(value) => setCouponForm((current) => ({ ...current, validUntil: applyDateMask(value, current.validUntil) }))}
+                    />
                     <Pressable disabled={busy === 'coupon'} style={styles.primaryButton} onPress={() => void saveCoupon()}>
-                      <Text style={styles.primaryText}>{busy === 'coupon' ? 'Saving…' : editingCouponId ? 'Save changes' : 'Create coupon'}</Text>
+                      <Text style={styles.primaryText}>{busy === 'coupon' ? 'Saving…' : 'Save'}</Text>
                     </Pressable>
                     {!!editingCouponId && (
                       <Pressable

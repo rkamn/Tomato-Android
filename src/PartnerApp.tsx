@@ -22,6 +22,24 @@ import ProfileAccess from './ProfileAccess';
 import SignOutModal from './SignOutModal';
 import { formatOrderNumber, getAccountDisplayId, getItemVariants, isOrderReturnAccepted } from './types';
 import type { ItemVariant, MenuItem, Order, Session, User } from './types';
+import { tomatoWs } from './websocket';
+
+export function isOrderDelivered(order: any): boolean {
+  if (!order) return false;
+  const s = String(order.status || '').toLowerCase().trim();
+  const ds = String(order.deliveryStatus || '').toLowerCase().trim();
+  return Boolean(
+    order.isDelivered ||
+    order.deliveredAt ||
+    order.trackingClosed ||
+    s === 'delivered' ||
+    s === 'completed' ||
+    s.includes('deliver') ||
+    ds === 'delivered' ||
+    ds === 'completed' ||
+    ds.includes('deliver')
+  );
+}
 
 type PartnerRole = 'restaurant' | 'shop';
 type PartnerTab = 'orders' | 'catalog' | 'coupons' | 'finance' | 'account';
@@ -172,7 +190,9 @@ export default function PartnerApp({
   const [savingItem, setSavingItem] = useState(false);
   const [form, setForm] = useState({
     name: '',
-    category: isShop ? 'Packaged Goods' : 'Main Course',
+    brand: '',
+    aliasText: '',
+    category: '',
     description: '',
     image: '',
     price: '',
@@ -246,6 +266,40 @@ export default function PartnerApp({
   useEffect(() => {
     void loadAll();
   }, [session.token, partnerRole]);
+
+  useEffect(() => {
+    if (!session.token) return;
+    tomatoWs.connect(session.token);
+
+    const unsubscribe = tomatoWs.onOrderUpdate((orderId, tracking) => {
+      const isDeliv = Boolean(
+        tracking.trackingClosed ||
+        String(tracking.status || '').toLowerCase().trim() === 'delivered' ||
+        String(tracking.status || '').toLowerCase().trim() === 'completed' ||
+        String(tracking.status || '').toLowerCase().includes('deliver')
+      );
+
+      if (isDeliv) {
+        setOrders((prev) =>
+          prev.map((o) =>
+            o._id === orderId
+              ? {
+                  ...o,
+                  status: tracking.status || 'delivered',
+                  deliveryStatus: 'delivered',
+                  isDelivered: true,
+                  deliveredAt: (tracking as any).deliveredAt || new Date().toISOString(),
+                }
+              : o,
+          ),
+        );
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [session.token]);
 
   useEffect(() => {
     if (tab !== 'orders') return;
@@ -420,7 +474,9 @@ export default function PartnerApp({
     setEditingId('');
     setForm({
       name: '',
-      category: isShop ? 'Packaged Goods' : 'Main Course',
+      brand: '',
+      aliasText: '',
+      category: '',
       description: '',
       image: '',
       price: '',
@@ -435,6 +491,8 @@ export default function PartnerApp({
     setEditingId(item._id);
     setForm({
       name: item.name,
+      brand: item.brand || '',
+      aliasText: Array.isArray(item.aliases) ? item.aliases.join(', ') : '',
       category: item.category || (isShop ? 'Packaged Goods' : 'Main Course'),
       description: item.description || '',
       image: item.image || '',
@@ -479,9 +537,17 @@ export default function PartnerApp({
         }));
       }
 
+      const parsedAliases = form.aliasText
+        .split(/[,\\n]/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      const uniqueAliases = Array.from(new Set(parsedAliases));
+
       const payload = {
         name: form.name.trim(),
-        category: form.category.trim(),
+        brand: form.brand.trim(),
+        aliases: uniqueAliases,
+        category: form.category.trim() || (isShop ? 'Packaged Goods' : 'Main Course'),
         description: form.description.trim(),
         image: form.image.trim(),
         price,
@@ -601,7 +667,7 @@ export default function PartnerApp({
       s === 'in_transit' ||
       order.isPickedUp ||
       order.pickupStatus === 'picked_up'
-    ) && s !== 'delivered' && s !== 'cancelled' && s !== 'returned';
+    ) && !isOrderDelivered(order) && s !== 'cancelled' && s !== 'returned';
   }).length;
   const cancelledTodayCount = orders.filter((order) => {
     const s = (order.status || '').toLowerCase();
@@ -617,8 +683,7 @@ export default function PartnerApp({
     );
   }).length;
   const deliveredTodayCount = orders.filter((order) => {
-    const s = (order.status || '').toLowerCase();
-    if (s !== 'delivered') return false;
+    if (!isOrderDelivered(order)) return false;
     const dateStr = (order as any).deliveredAt || order.updatedAt || order.createdAt;
     if (!dateStr) return true;
     const d = new Date(dateStr);
@@ -645,7 +710,7 @@ export default function PartnerApp({
           ['accepted', 'preparing', 'ready_for_pickup', 'out_for_delivery', 'in_transit', 'picked_up'].includes(s) ||
           order.isPickedUp ||
           order.pickupStatus === 'picked_up'
-        ) && s !== 'delivered' && s !== 'cancelled' && s !== 'returned';
+        ) && !isOrderDelivered(order) && s !== 'cancelled' && s !== 'returned';
       }
       if (orderFilter === 'out_for_delivery') {
         const s = (order.status || '').toLowerCase();
@@ -654,7 +719,7 @@ export default function PartnerApp({
           s === 'in_transit' ||
           order.isPickedUp ||
           order.pickupStatus === 'picked_up'
-        ) && s !== 'delivered' && s !== 'cancelled' && s !== 'returned';
+        ) && !isOrderDelivered(order) && s !== 'cancelled' && s !== 'returned';
       }
       if (orderFilter === 'cancelled_today') {
         const s = (order.status || '').toLowerCase();
@@ -670,8 +735,7 @@ export default function PartnerApp({
         );
       }
       if (orderFilter === 'delivered_today') {
-        const s = (order.status || '').toLowerCase();
-        if (s !== 'delivered') return false;
+        if (!isOrderDelivered(order)) return false;
         const dateStr = (order as any).deliveredAt || order.updatedAt || order.createdAt;
         if (!dateStr) return true;
         const d = new Date(dateStr);
@@ -910,8 +974,28 @@ export default function PartnerApp({
                   value={form.name}
                 />
                 <TextInput
+                  onChangeText={(value) => setForm((current) => ({ ...current, brand: value }))}
+                  placeholder={isShop ? 'Brand name (e.g. Amul, Britannia, Nestlé, Fortune)' : 'Brand name (optional, e.g. Kitchen Signature, Haldiram)'}
+                  style={styles.input}
+                  value={form.brand}
+                />
+                <TextInput
+                  onChangeText={(value) => setForm((current) => ({ ...current, aliasText: value }))}
+                  placeholder={
+                    isShop
+                      ? 'Aliases / Alternate names (e.g. Haldi, haldii, Turmeric, Haldi powder)'
+                      : 'Aliases / Alternate names (e.g. Butter Paneer, Paneer Makhani, Shahi Paneer)'
+                  }
+                  style={[styles.input, styles.multilineSmall]}
+                  value={form.aliasText}
+                  multiline
+                />
+                <Text style={styles.formHintText}>
+                  💡 Aliases: Enter alternate names, regional names, or common spellings separated by commas.
+                </Text>
+                <TextInput
                   onChangeText={(value) => setForm((current) => ({ ...current, category: value }))}
-                  placeholder="Category"
+                  placeholder={isShop ? 'Category (e.g. Packaged Goods)' : 'Category (e.g. Main Course)'}
                   style={styles.input}
                   value={form.category}
                 />
@@ -1044,8 +1128,25 @@ export default function PartnerApp({
                 return (
                   <View key={item._id} style={styles.itemCard}>
                     <View style={styles.flex}>
-                      <Text style={styles.cardTitle}>{item.name}</Text>
+                      <View style={styles.itemNameAndBrandRow}>
+                        <Text style={styles.cardTitle}>{item.name}</Text>
+                        {!!item.brand && (
+                          <View style={styles.itemBrandBadge}>
+                            <Text style={styles.itemBrandBadgeText}>🏷️ {item.brand}</Text>
+                          </View>
+                        )}
+                      </View>
                       <Text style={styles.muted}>{item.category || (isShop ? 'Product' : 'Dish')} · {money(item.price)}</Text>
+                      {item.aliases && item.aliases.length > 0 && (
+                        <View style={styles.aliasesRow}>
+                          <Text style={styles.aliasesLabel}>Aliases:</Text>
+                          {item.aliases.map((alias, aIdx) => (
+                            <View key={aIdx} style={styles.aliasPill}>
+                              <Text style={styles.aliasPillText}>{alias}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
                       {itemVariants.length > 0 && (
                         <View style={styles.itemVariantsRow}>
                           {itemVariants.map((v) => (
@@ -1147,13 +1248,22 @@ function PartnerOrderCard({
   storeDigipin?: string;
   storeAddress?: string;
 }) {
+  const effectiveIsShop = Boolean(
+    isShop ||
+    partnerRole === 'shop' ||
+    order.isShopOrder ||
+    (order as any).isShop ||
+    (order as any).storeType === 'shop' ||
+    (order as any).orderType === 'shop' ||
+    (order.orderNumber && String(order.orderNumber).toUpperCase().includes('SHOP'))
+  );
   const status = order.status || 'placed';
   const actions = (statusActions[status] || []).map((action) => ({
     ...action,
-    label: isShop && action.next === 'preparing' ? 'Start packing' : action.label,
+    label: effectiveIsShop && action.next === 'preparing' ? 'Start packing' : action.label,
   }));
   const isCancelled = status.toLowerCase() === 'cancelled';
-  const isDelivered = status.toLowerCase() === 'delivered';
+  const isDelivered = isOrderDelivered(order);
   const isPickedUp = Boolean(
     order.isPickedUp ||
     order.pickupStatus === 'picked_up' ||
@@ -1168,13 +1278,19 @@ function PartnerOrderCard({
   const [showBill, setShowBill] = useState(false);
   const [showTracking, setShowTracking] = useState(false);
 
+  useEffect(() => {
+    if (isDelivered && showTracking) {
+      setShowTracking(false);
+    }
+  }, [isDelivered, showTracking]);
+
   const isRiderAssigned = Boolean(
     (order as any).rider ||
     (order as any).riderId ||
     (order as any).riderUserId ||
     (order as any).assignedRider ||
     (order as any).riderName ||
-    ['out_for_delivery', 'picked_up', 'in_transit', 'delivered'].includes((order.status || '').toLowerCase()) ||
+    ['out_for_delivery', 'picked_up', 'in_transit'].includes((order.status || '').toLowerCase()) ||
     order.isPickedUp ||
     order.pickupStatus === 'picked_up'
   );
@@ -1219,7 +1335,7 @@ function PartnerOrderCard({
               {order.items.map((it, idx) => (
                 <View key={idx} style={styles.billItemRow}>
                   <Text style={styles.billItemName} numberOfLines={1}>
-                    {it.name} × {it.quantity || 1}
+                    {it.name}{(it as any).brand ? ` (${(it as any).brand})` : ''} × {it.quantity || 1}
                   </Text>
                   <Text style={styles.billItemPrice}>
                     {money((Number(it.price) || 0) * (it.quantity || 1))}
@@ -1294,7 +1410,7 @@ function PartnerOrderCard({
       </View>
       {isPickedUp && !isDelivered && !isCancelled && (
         <Text style={styles.deliveryPartnerNote}>
-          This {isShop ? 'shop' : 'restaurant'} order is now with the delivery partner.
+          This {effectiveIsShop ? 'shop' : 'restaurant'} order is now with the delivery partner.
         </Text>
       )}
       {showTracking && isRiderAssigned && !isDelivered && !isCancelled && (
@@ -1303,7 +1419,7 @@ function PartnerOrderCard({
           orderNumber={formattedOrderNumber}
           endpoint={sessionToken && partnerRole ? `/api/${partnerRole}/orders/${order._id}/live-tracking` : undefined}
           token={sessionToken}
-          isShop={isShop}
+          isShop={effectiveIsShop}
           onClose={() => setShowTracking(false)}
           fallbackRiderName={(order as any).riderName || (order as any).rider?.name}
           fallbackRiderPhone={(order as any).riderPhone || (order as any).rider?.phone}
@@ -1313,7 +1429,7 @@ function PartnerOrderCard({
             resolveCustomerDigipin(order) ||
             order.deliveryAddress?.digipin
           }
-          fallbackStoreName={storeName || (isShop ? 'Shop' : 'Spice Garden')}
+          fallbackStoreName={storeName || (effectiveIsShop ? 'Shop' : 'Spice Garden')}
           fallbackStoreDigipin={storeDigipin}
           fallbackStoreAddress={storeAddress}
           isPickedUp={isPickedUp}
@@ -1323,7 +1439,7 @@ function PartnerOrderCard({
       {isCancelled && !returnAccepted && canManage && (
         <View style={styles.returnBox}>
           <Text style={styles.returnBoxText}>
-            📦 Order was cancelled · Item returning to {isShop ? 'shop' : 'restaurant'}
+            📦 Order was cancelled · Item returning to {effectiveIsShop ? 'shop' : 'restaurant'}
           </Text>
           <Pressable
             disabled={busy}
@@ -2034,26 +2150,26 @@ const styles = StyleSheet.create({
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   smallPrimary: { borderRadius: 11, backgroundColor: '#d83a32', paddingHorizontal: 13, paddingVertical: 10 },
   smallPrimaryText: { color: '#fff', fontWeight: '800', fontSize: 13 },
-  formCard: { backgroundColor: 'rgba(255, 255, 255, 0.85)', borderColor: 'rgba(255, 255, 255, 0.95)', borderWidth: 1.5, borderRadius: 20, padding: 14, marginBottom: 14, shadowColor: '#a82c24', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3 },
+  formCard: { backgroundColor: '#ffffff', borderColor: '#93c5fd', borderWidth: 1.5, borderRadius: 20, padding: 14, marginBottom: 14, shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3 },
   cardTitle: { color: '#302923', fontSize: 14, fontWeight: '800' },
-  input: { minHeight: 44, backgroundColor: 'rgba(255, 255, 255, 0.78)', borderColor: 'rgba(255, 255, 255, 0.95)', borderWidth: 1.2, borderRadius: 14, paddingHorizontal: 12, color: '#302923', fontSize: 13, marginTop: 9 },
+  input: { minHeight: 44, backgroundColor: '#ffffff', borderColor: '#93c5fd', borderWidth: 1.5, borderRadius: 14, paddingHorizontal: 12, color: '#302923', fontSize: 13, marginTop: 9 },
   multiline: { minHeight: 72, textAlignVertical: 'top', paddingTop: 11 },
   inputRow: { flexDirection: 'row', gap: 8 },
   halfInput: { flex: 1 },
   fieldLabel: { color: '#756b63', fontSize: 11, fontWeight: '700', marginTop: 12 },
   dietRow: { flexDirection: 'row', gap: 7, marginVertical: 9 },
-  dietChip: { borderColor: '#eee3da', borderWidth: 1, borderRadius: 9, paddingVertical: 7, paddingHorizontal: 10 },
-  dietChipActive: { borderColor: '#d83a32', backgroundColor: '#fff0eb' },
+  dietChip: { borderColor: '#93c5fd', borderWidth: 1, borderRadius: 9, paddingVertical: 7, paddingHorizontal: 10 },
+  dietChipActive: { borderColor: '#2563eb', backgroundColor: '#eff6ff' },
   dietText: { color: '#776d65', fontSize: 11, textTransform: 'capitalize' },
-  dietTextActive: { color: '#c8322a', fontWeight: '800' },
+  dietTextActive: { color: '#1d4ed8', fontWeight: '800' },
   variantsSection: {
     marginTop: 12,
     marginBottom: 12,
     padding: 12,
-    backgroundColor: '#fff9f6',
+    backgroundColor: '#f0f9ff',
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#fcdcd5',
+    borderWidth: 1.5,
+    borderColor: '#93c5fd',
   },
   variantHeaderRow: {
     flexDirection: 'row',
@@ -2072,7 +2188,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   addVariantMiniBtn: {
-    backgroundColor: '#d83a32',
+    backgroundColor: '#2563eb',
     paddingVertical: 5,
     paddingHorizontal: 10,
     borderRadius: 8,
@@ -2098,7 +2214,7 @@ const styles = StyleSheet.create({
   presetChip: {
     backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#e7d9d0',
+    borderColor: '#93c5fd',
     borderRadius: 6,
     paddingVertical: 4,
     paddingHorizontal: 8,
@@ -2118,11 +2234,15 @@ const styles = StyleSheet.create({
     flex: 2,
     marginTop: 0,
     backgroundColor: '#ffffff',
+    borderColor: '#93c5fd',
+    borderWidth: 1.5,
   },
   variantPriceInput: {
     flex: 1.2,
     marginTop: 0,
     backgroundColor: '#ffffff',
+    borderColor: '#93c5fd',
+    borderWidth: 1.5,
   },
   variantRemoveBtn: {
     padding: 6,
@@ -2159,6 +2279,15 @@ const styles = StyleSheet.create({
   cancel: { alignItems: 'center', padding: 11 },
   cancelText: { color: '#756b63', fontSize: 12, fontWeight: '700' },
   itemCard: { backgroundColor: 'rgba(255, 255, 255, 0.85)', borderColor: 'rgba(255, 255, 255, 0.95)', borderWidth: 1.5, borderRadius: 16, padding: 13, marginBottom: 9, flexDirection: 'row', gap: 8, alignItems: 'center', shadowColor: '#a82c24', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
+  itemNameAndBrandRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+  itemBrandBadge: { backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
+  itemBrandBadgeText: { color: '#166534', fontSize: 10, fontWeight: '700' },
+  multilineSmall: { minHeight: 52, textAlignVertical: 'top', paddingTop: 8 },
+  formHintText: { fontSize: 11, color: '#8d8178', marginBottom: 8, marginTop: -4, lineHeight: 15 },
+  aliasesRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4, marginTop: 4 },
+  aliasesLabel: { fontSize: 10, color: '#8d8178', fontWeight: '700', marginRight: 2 },
+  aliasPill: { backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 5, paddingHorizontal: 6, paddingVertical: 1.5 },
+  aliasPillText: { color: '#334155', fontSize: 10, fontWeight: '600' },
   stock: { color: '#27734a', fontSize: 10, fontWeight: '700', marginTop: 5 },
   stockOff: { color: '#927c6d' },
   itemActions: { alignItems: 'flex-end', gap: 8 },

@@ -466,6 +466,8 @@ export default function AdminApp({
   const [newStaffPermissions, setNewStaffPermissions] = useState<string[]>(['dashboard_view', 'orders_manage']);
   const [newRole, setNewRole] = useState({ displayName: '', roleKey: '', description: '' });
   const [newRolePermissions, setNewRolePermissions] = useState<string[]>(['dashboard_view']);
+  const [createSubadminExpanded, setCreateSubadminExpanded] = useState(false);
+  const [createRoleExpanded, setCreateRoleExpanded] = useState(false);
   const [busyId, setBusyId] = useState('');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const mainScrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
@@ -1174,6 +1176,7 @@ export default function AdminApp({
       });
       setNewStaff({ name: '', email: '', phone: '', password: '', title: 'Operations Sub-Admin' });
       setNewStaffPermissions(['dashboard_view', 'orders_manage']);
+      setCreateSubadminExpanded(false);
       await loadTeam();
     });
   }
@@ -1193,6 +1196,7 @@ export default function AdminApp({
         }),
       });
       setNewRole({ displayName: '', roleKey: '', description: '' });
+      setCreateRoleExpanded(false);
       await loadTeam();
     });
   }
@@ -2573,28 +2577,80 @@ export default function AdminApp({
                 <Text style={styles.sectionTitle}>Administration team</Text>
                 {(role === 'admin' || isSuperAdmin) && (
                   <View style={styles.card}>
-                    <Text style={styles.cardTitle}>Create a sub-admin</Text>
-                    <TextInput style={styles.input} placeholder="Full name" value={newStaff.name} onChangeText={(name) => setNewStaff((current) => ({ ...current, name }))} />
-                    <TextInput style={styles.input} placeholder="Email (optional)" autoCapitalize="none" keyboardType="email-address" value={newStaff.email} onChangeText={(email) => setNewStaff((current) => ({ ...current, email }))} />
-                    <TextInput style={styles.input} placeholder="Phone (optional)" keyboardType="phone-pad" value={newStaff.phone} onChangeText={(phone) => setNewStaff((current) => ({ ...current, phone }))} />
-                    <TextInput style={styles.input} placeholder="Temporary password (8+ characters)" secureTextEntry value={newStaff.password} onChangeText={(password) => setNewStaff((current) => ({ ...current, password }))} />
-                    <TextInput style={styles.input} placeholder="Role title" value={newStaff.title} onChangeText={(title) => setNewStaff((current) => ({ ...current, title }))} />
-                    <Text style={styles.fieldLabel}>Permissions</Text>
-                    <View style={styles.chips}>
-                      {permissions.map(([key, title]) => (
-                        <Chip
-                          key={key}
-                          title={title}
-                          selected={newStaffPermissions.includes(key)}
-                          onPress={() => setNewStaffPermissions((current) =>
-                            current.includes(key) ? current.filter((permission) => permission !== key) : [...current, key],
-                          )}
-                        />
-                      ))}
+                    <View style={styles.cardHeaderRow}>
+                      <Text style={[styles.cardTitle, { marginBottom: 0 }]}>Create a sub-admin</Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={createSubadminExpanded ? 'Contract create sub-admin' : 'Expand create sub-admin'}
+                        style={styles.expandCollapseBtn}
+                        onPress={() => setCreateSubadminExpanded((prev) => !prev)}
+                      >
+                        <Text style={styles.expandCollapseBtnText}>{createSubadminExpanded ? '−' : '+'}</Text>
+                      </Pressable>
                     </View>
-                    <Pressable style={styles.primaryButton} disabled={busyId === 'create-subadmin'} onPress={() => void createSubadmin()}>
-                      <Text style={styles.primaryButtonText}>Create sub-admin</Text>
-                    </Pressable>
+                    {createSubadminExpanded && (
+                      <View style={styles.formBody}>
+                        <TextInput style={styles.input} placeholder="Full name" value={newStaff.name} onChangeText={(name) => setNewStaff((current) => ({ ...current, name }))} />
+                        <TextInput style={styles.input} placeholder="Email (optional)" autoCapitalize="none" keyboardType="email-address" value={newStaff.email} onChangeText={(email) => setNewStaff((current) => ({ ...current, email }))} />
+                        <TextInput style={styles.input} placeholder="Phone (optional)" keyboardType="phone-pad" value={newStaff.phone} onChangeText={(phone) => setNewStaff((current) => ({ ...current, phone }))} />
+                        <TextInput style={styles.input} placeholder="Temporary password (8+ characters)" secureTextEntry value={newStaff.password} onChangeText={(password) => setNewStaff((current) => ({ ...current, password }))} />
+                        <TextInput style={styles.input} placeholder="Role title" value={newStaff.title} onChangeText={(title) => setNewStaff((current) => ({ ...current, title }))} />
+                        <Text style={styles.fieldLabel}>Permissions</Text>
+                        <View style={styles.chips}>
+                          {permissions.map(([key, title]) => (
+                            <Chip
+                              key={key}
+                              title={title}
+                              selected={newStaffPermissions.includes(key)}
+                              onPress={() => setNewStaffPermissions((current) =>
+                                current.includes(key) ? current.filter((permission) => permission !== key) : [...current, key],
+                              )}
+                            />
+                          ))}
+                        </View>
+                        <Pressable style={styles.primaryButton} disabled={busyId === 'create-subadmin'} onPress={() => void createSubadmin()}>
+                          <Text style={styles.primaryButtonText}>Create sub-admin</Text>
+                        </Pressable>
+                      </View>
+                    )}
+                  </View>
+                )}
+                {isPlatformAdmin && isSuperAdmin && (
+                  <View style={styles.card}>
+                    <View style={styles.cardHeaderRow}>
+                      <Text style={[styles.cardTitle, { marginBottom: 0 }]}>Create a delegated role</Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={createRoleExpanded ? 'Contract create delegated role' : 'Expand create delegated role'}
+                        style={styles.expandCollapseBtn}
+                        onPress={() => setCreateRoleExpanded((prev) => !prev)}
+                      >
+                        <Text style={styles.expandCollapseBtnText}>{createRoleExpanded ? '−' : '+'}</Text>
+                      </Pressable>
+                    </View>
+                    {createRoleExpanded && (
+                      <View style={styles.formBody}>
+                        <TextInput style={styles.input} placeholder="Display name" value={newRole.displayName} onChangeText={(displayName) => setNewRole((current) => ({ ...current, displayName }))} />
+                        <TextInput style={styles.input} placeholder="Role key (optional)" autoCapitalize="none" value={newRole.roleKey} onChangeText={(roleKey) => setNewRole((current) => ({ ...current, roleKey }))} />
+                        <TextInput style={styles.input} placeholder="Description" value={newRole.description} onChangeText={(description) => setNewRole((current) => ({ ...current, description }))} />
+                        <Text style={styles.fieldLabel}>Permissions</Text>
+                        <View style={styles.chips}>
+                          {permissions.map(([key, title]) => (
+                            <Chip
+                              key={key}
+                              title={title}
+                              selected={newRolePermissions.includes(key)}
+                              onPress={() => setNewRolePermissions((current) =>
+                                current.includes(key) ? current.filter((permission) => permission !== key) : [...current, key],
+                              )}
+                            />
+                          ))}
+                        </View>
+                        <Pressable style={styles.primaryButton} disabled={busyId === 'create-role'} onPress={() => void createCustomRole()}>
+                          <Text style={styles.primaryButtonText}>Create custom role</Text>
+                        </Pressable>
+                      </View>
+                    )}
                   </View>
                 )}
                 {staff.map((member) => (
@@ -2636,43 +2692,6 @@ export default function AdminApp({
                   </View>
                 ))}
                 {!staff.length && <Text style={styles.muted}>No staff accounts found.</Text>}
-                {isPlatformAdmin && (
-                  <>
-                    <Text style={styles.sectionTitle}>Custom roles</Text>
-                    {isSuperAdmin && (
-                      <View style={styles.card}>
-                        <Text style={styles.cardTitle}>Create a delegated role</Text>
-                        <TextInput style={styles.input} placeholder="Display name" value={newRole.displayName} onChangeText={(displayName) => setNewRole((current) => ({ ...current, displayName }))} />
-                        <TextInput style={styles.input} placeholder="Role key (optional)" autoCapitalize="none" value={newRole.roleKey} onChangeText={(roleKey) => setNewRole((current) => ({ ...current, roleKey }))} />
-                        <TextInput style={styles.input} placeholder="Description" value={newRole.description} onChangeText={(description) => setNewRole((current) => ({ ...current, description }))} />
-                        <Text style={styles.fieldLabel}>Permissions</Text>
-                        <View style={styles.chips}>
-                          {permissions.map(([key, title]) => (
-                            <Chip
-                              key={key}
-                              title={title}
-                              selected={newRolePermissions.includes(key)}
-                              onPress={() => setNewRolePermissions((current) =>
-                                current.includes(key) ? current.filter((permission) => permission !== key) : [...current, key],
-                              )}
-                            />
-                          ))}
-                        </View>
-                        <Pressable style={styles.primaryButton} disabled={busyId === 'create-role'} onPress={() => void createCustomRole()}>
-                          <Text style={styles.primaryButtonText}>Create custom role</Text>
-                        </Pressable>
-                      </View>
-                    )}
-                    {staffRoles.map((staffRole) => (
-                      <View key={staffRole.roleKey} style={styles.card}>
-                        <Text style={styles.cardTitle}>{staffRole.displayName} · {staffRole.roleKey}</Text>
-                        <Text style={styles.muted}>{staffRole.description || 'No description'} · {staffRole.assignedCount || 0} assigned</Text>
-                        <Text style={styles.muted}>Base: {label(staffRole.baseRole)} · {staffRole.isSystem ? 'System role' : 'Custom role'}</Text>
-                        <Text style={styles.muted}>Permissions: {(staffRole.permissions || []).join(', ') || 'None'}</Text>
-                      </View>
-                    ))}
-                  </>
-                )}
               </View>
             )}
           </>
@@ -3371,6 +3390,34 @@ const styles = StyleSheet.create({
   metricLabel: { color: '#6b625d', fontSize: 12, marginTop: 5 },
   card: { backgroundColor: 'rgba(255, 255, 255, 0.85)', padding: 14, borderRadius: 20, borderWidth: 1.5, borderColor: 'rgba(255, 255, 255, 0.95)', marginBottom: 10, shadowColor: '#a82c24', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3 },
   cardTitle: { color: '#292421', fontSize: 15, fontWeight: '800', marginBottom: 5 },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+  },
+  expandCollapseBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#d83a32',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#d83a32',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  expandCollapseBtnText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  formBody: {
+    marginTop: 6,
+  },
   muted: { color: '#766d68', fontSize: 13, lineHeight: 19, marginVertical: 3 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginVertical: 8 },
   chip: { borderRadius: 18, borderWidth: 1, borderColor: '#eaded7', paddingHorizontal: 11, paddingVertical: 8, backgroundColor: '#fff' },

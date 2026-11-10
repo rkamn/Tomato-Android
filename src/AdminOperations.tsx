@@ -60,6 +60,62 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
 }
 
+function parseCouponDate(val: string, isEndOfDay = false): string | undefined {
+  const str = val.trim();
+  if (!str) return undefined;
+  // If DD-MM-YYYY or DD/MM/YYYY
+  const dmy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (dmy) {
+    const d = parseInt(dmy[1], 10);
+    const m = parseInt(dmy[2], 10) - 1;
+    const y = parseInt(dmy[3], 10);
+    const dt = isEndOfDay ? new Date(Date.UTC(y, m, d, 23, 59, 59, 999)) : new Date(Date.UTC(y, m, d, 0, 0, 0, 0));
+    return isNaN(dt.getTime()) ? undefined : dt.toISOString();
+  }
+  // If YYYY-MM-DD
+  const ymd = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (ymd) {
+    const y = parseInt(ymd[1], 10);
+    const m = parseInt(ymd[2], 10) - 1;
+    const d = parseInt(ymd[3], 10);
+    const dt = isEndOfDay ? new Date(Date.UTC(y, m, d, 23, 59, 59, 999)) : new Date(Date.UTC(y, m, d, 0, 0, 0, 0));
+    return isNaN(dt.getTime()) ? undefined : dt.toISOString();
+  }
+  const parsed = Date.parse(str);
+  if (!Number.isNaN(parsed)) {
+    return new Date(parsed).toISOString();
+  }
+  return undefined;
+}
+
+function applyDateMask(nextText: string, prevText: string): string {
+  if (prevText && nextText.length < prevText.length) {
+    if (prevText.endsWith('/') && nextText.endsWith('/')) {
+      return nextText.slice(0, -1);
+    }
+    return nextText;
+  }
+  const digits = nextText.replace(/\D/g, '').slice(0, 8);
+  if (!digits) return '';
+  if (digits.length === 1) return digits;
+  if (digits.length === 2) return `${digits}/`;
+  if (digits.length === 3) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  if (digits.length === 4) return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+function isoToDmy(isoVal: unknown): string {
+  if (!isoVal) return '';
+  const str = String(isoVal).trim();
+  if (!str) return '';
+  const d = new Date(str);
+  if (isNaN(d.getTime())) return str;
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const year = d.getUTCFullYear();
+  return `${day}/${month}/${year}`;
+}
+
 function InfoLine({ label, value }: { label: string; value: unknown }) {
   return (
     <View style={styles.infoLine}>
@@ -420,6 +476,9 @@ export default function AdminOperations({
   const [error, setError] = useState('');
   const [bankMode, setBankMode] = useState<'partners' | 'settlements'>('partners');
   const [editingCouponId, setEditingCouponId] = useState('');
+  const [couponFormExpanded, setCouponFormExpanded] = useState(false);
+  const [allCouponsExpanded, setAllCouponsExpanded] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
   const [analyticsRange, setAnalyticsRange] = useState({ startDate: '', endDate: '' });
   const [selectedPeriod, setSelectedPeriod] = useState<'all' | 'today' | '7d' | '30d'>('all');
   const [agreementDraft, setAgreementDraft] = useState({
@@ -429,6 +488,20 @@ export default function AdminOperations({
     partnerPayoutAmount: '',
     adminNote: '',
   });
+  const [transferTypeDropdownOpen, setTransferTypeDropdownOpen] = useState(false);
+  const [billingExpanded, setBillingExpanded] = useState<Record<string, boolean>>({
+    shops: false,
+    restaurants: false,
+    riders: false,
+    staffs: false,
+  });
+
+  function toggleBillingCategory(key: string) {
+    setBillingExpanded((current) => ({
+      ...current,
+      [key]: !current[key],
+    }));
+  }
   const [form, setForm] = useState({
     recipientId: '',
     transferType: 'wallet',
@@ -447,7 +520,7 @@ export default function AdminOperations({
     targetItemCategory: '',
     occasionName: '',
     targetUserIdentifier: '',
-    applicableStoreType: '',
+    applicableStoreType: 'all',
     usageLimitPerUser: '',
     totalUsageLimit: '',
     validFrom: '',
@@ -570,12 +643,13 @@ export default function AdminOperations({
             method: 'POST',
             body: JSON.stringify({
               recipientId: form.recipientId.trim(),
-              transferType: form.transferType,
+              transferType: form.transferType === 'wallet' ? 'wallet' : 'credit_point',
               amount,
               purpose: form.purpose.trim(),
               ...(form.orderNumber.trim() ? { orderNumber: form.orderNumber.trim() } : {}),
             }),
           });
+          setTransferTypeDropdownOpen(false);
           setForm((current) => ({ ...current, recipientId: '', amount: '', purpose: '', orderNumber: '' }));
         }),
       },
@@ -678,11 +752,13 @@ export default function AdminOperations({
       ? 'shop'
       : rawRole.includes('restaurant')
         ? 'restaurant'
-        : rawRole.includes('delivery')
+        : rawRole.includes('delivery') || rawRole.includes('rider')
           ? 'deliveryPartner'
-          : rawRole;
-    if (!id || !['restaurant', 'shop', 'deliveryPartner'].includes(role)) {
-      setError('Partner billing entry is missing a valid restaurant, shop or rider ID/role.');
+          : rawRole.includes('staff') || rawRole.includes('employee') || rawRole.includes('admin')
+            ? 'staff'
+            : rawRole;
+    if (!id || !['restaurant', 'shop', 'deliveryPartner', 'staff'].includes(role)) {
+      setError('Partner billing entry is missing a valid restaurant, shop, rider, or staff ID/role.');
       return;
     }
     Alert.alert('Settle partner billing?', `Settle pending billing for ${text(partner.name, role)}?`, [
@@ -699,9 +775,19 @@ export default function AdminOperations({
   }
 
   async function createCoupon() {
+    setError('');
+    setSuccessMessage('');
     const discountValue = Number(form.discountValue);
     if (!form.code.trim() || !form.title.trim() || !Number.isFinite(discountValue) || discountValue <= 0) {
       setError('Enter a coupon code, title and positive discount value.');
+      return;
+    }
+    if (form.discountType === 'percentage' && discountValue > 100) {
+      setError('Percentage discount cannot exceed 100%.');
+      return;
+    }
+    if ((form.couponType === 'specific_user' || form.couponType === 'instant') && !form.targetUserIdentifier.trim()) {
+      setError(`Target customer ID, email or phone is required for ${form.couponType.replace('_', ' ')} coupon.`);
       return;
     }
     const optionalAmounts = [
@@ -723,45 +809,73 @@ export default function AdminOperations({
       setError('Coupon usage limits must be whole numbers.');
       return;
     }
-    if (
-      (form.validFrom && Number.isNaN(Date.parse(form.validFrom)))
-      || (form.validUntil && Number.isNaN(Date.parse(form.validUntil)))
-    ) {
-      setError('Enter valid coupon dates in ISO date format.');
+
+    const isoValidFrom = form.validFrom.trim() ? parseCouponDate(form.validFrom, false) : undefined;
+    if (form.validFrom.trim() && !isoValidFrom) {
+      setError('Valid from date is invalid. Please enter DD/MM/YYYY.');
       return;
     }
+    const isoValidUntil = form.validUntil.trim() ? parseCouponDate(form.validUntil, true) : undefined;
+    if (form.validUntil.trim() && !isoValidUntil) {
+      setError('Valid until date is invalid. Please enter DD/MM/YYYY.');
+      return;
+    }
+
     await runAction(editingCouponId || 'create-coupon', async () => {
+      const codeUpper = form.code.trim().toUpperCase().replace(/\s+/g, '');
       await apiRequest(
         editingCouponId
           ? `/api/admin/coupons/${encodeURIComponent(editingCouponId)}`
           : '/api/admin/coupons',
         session.token,
         {
-        method: editingCouponId ? 'PUT' : 'POST',
-        body: JSON.stringify({
-          code: form.code.trim().toUpperCase(),
-          title: form.title.trim(),
-          ...(form.description.trim() ? { description: form.description.trim() } : {}),
-          couponType: form.couponType,
-          sponsorType: form.sponsorType,
-          discountType: form.discountType,
-          discountValue,
-          ...(form.minOrderAmount ? { minOrderAmount: Number(form.minOrderAmount) } : {}),
-          ...(form.maxDiscountAmount ? { maxDiscountAmount: Number(form.maxDiscountAmount) } : {}),
-          ...(form.targetItemCategory.trim() ? { targetItemCategory: form.targetItemCategory.trim() } : {}),
-          ...(form.occasionName.trim() ? { occasionName: form.occasionName.trim() } : {}),
-          ...(form.targetUserIdentifier.trim() ? { targetUserIdentifier: form.targetUserIdentifier.trim() } : {}),
-          ...(form.applicableStoreType ? { applicableStoreType: form.applicableStoreType } : {}),
-          ...(form.usageLimitPerUser ? { usageLimitPerUser: Number(form.usageLimitPerUser) } : {}),
-          ...(form.totalUsageLimit ? { totalUsageLimit: Number(form.totalUsageLimit) } : {}),
-          ...(form.validFrom ? { validFrom: form.validFrom } : {}),
-          ...(form.validUntil ? { validUntil: form.validUntil } : {}),
-          isActive: true,
-        }),
+          method: editingCouponId ? 'PUT' : 'POST',
+          body: JSON.stringify({
+            code: codeUpper,
+            title: form.title.trim(),
+            ...(form.description.trim() ? { description: form.description.trim() } : {}),
+            couponType: form.couponType,
+            sponsorType: form.sponsorType,
+            discountType: form.discountType,
+            discountValue,
+            ...(form.minOrderAmount ? { minOrderAmount: Number(form.minOrderAmount) } : {}),
+            ...(form.maxDiscountAmount ? { maxDiscountAmount: Number(form.maxDiscountAmount) } : {}),
+            ...(form.targetItemCategory.trim() ? { targetItemCategory: form.targetItemCategory.trim() } : {}),
+            ...(form.occasionName.trim() ? { occasionName: form.occasionName.trim() } : {}),
+            ...(form.targetUserIdentifier.trim() ? { targetUserIdentifier: form.targetUserIdentifier.trim() } : {}),
+            applicableStoreType: form.applicableStoreType || 'all',
+            ...(form.usageLimitPerUser ? { usageLimitPerUser: Number(form.usageLimitPerUser) } : {}),
+            ...(form.totalUsageLimit ? { totalUsageLimit: Number(form.totalUsageLimit) } : {}),
+            ...(isoValidFrom ? { validFrom: isoValidFrom } : {}),
+            ...(isoValidUntil ? { validUntil: isoValidUntil } : {}),
+            isActive: true,
+          }),
         },
       );
+      setSuccessMessage(
+        editingCouponId
+          ? `Coupon "${codeUpper}" updated successfully!`
+          : `Coupon "${codeUpper}" created successfully!`
+      );
       setEditingCouponId('');
-      setForm((current) => ({ ...current, code: '', title: '', discountValue: '', minOrderAmount: '', maxDiscountAmount: '' }));
+      setCouponFormExpanded(false);
+      setForm((current) => ({
+        ...current,
+        code: '',
+        title: '',
+        description: '',
+        discountValue: '',
+        minOrderAmount: '',
+        maxDiscountAmount: '',
+        targetItemCategory: '',
+        occasionName: '',
+        targetUserIdentifier: '',
+        applicableStoreType: 'all',
+        usageLimitPerUser: '',
+        totalUsageLimit: '',
+        validFrom: '',
+        validUntil: '',
+      }));
     });
   }
 
@@ -771,7 +885,10 @@ export default function AdminOperations({
       setError('This coupon does not include an ID.');
       return;
     }
+    setError('');
+    setSuccessMessage('');
     setEditingCouponId(id);
+    setCouponFormExpanded(true);
     setForm((current) => ({
       ...current,
       code: text(coupon.code, ''),
@@ -786,11 +903,11 @@ export default function AdminOperations({
       targetItemCategory: text(coupon.targetItemCategory, ''),
       occasionName: text(coupon.occasionName, ''),
       targetUserIdentifier: text(coupon.targetUserIdentifier, ''),
-      applicableStoreType: text(coupon.applicableStoreType, ''),
+      applicableStoreType: text(coupon.applicableStoreType, 'all'),
       usageLimitPerUser: text(coupon.usageLimitPerUser, ''),
       totalUsageLimit: text(coupon.totalUsageLimit, ''),
-      validFrom: text(coupon.validFrom, ''),
-      validUntil: text(coupon.validUntil, ''),
+      validFrom: isoToDmy(coupon.validFrom),
+      validUntil: isoToDmy(coupon.validUntil),
     }));
   }
 
@@ -834,11 +951,36 @@ export default function AdminOperations({
   const coupons = asList(data.coupons) as Coupon[];
   const billingPartners = asList(data.billingList || data.partners || data.billingPartners || data.results);
 
+  const shopBillingPartners = billingPartners.filter((p) => {
+    const t = text(p.partnerType, '').toLowerCase();
+    return t === 'shop';
+  });
+  const restaurantBillingPartners = billingPartners.filter((p) => {
+    const t = text(p.partnerType, '').toLowerCase();
+    return t === 'restaurant';
+  });
+  const riderBillingPartners = billingPartners.filter((p) => {
+    const t = text(p.partnerType, '').toLowerCase();
+    return t === 'deliverypartner' || t === 'rider';
+  });
+  const staffBillingPartners = billingPartners.filter((p) => {
+    const t = text(p.partnerType, '').toLowerCase();
+    return t === 'staff' || t === 'employee' || t === 'admin' || t === 'subadmin';
+  });
+
+  const billingCategories = [
+    { key: 'shops', title: 'Shops', icon: '🏬', items: shopBillingPartners, emptyText: 'No shops found.' },
+    { key: 'restaurants', title: 'Restaurants', icon: '🍽️', items: restaurantBillingPartners, emptyText: 'No restaurants found.' },
+    { key: 'riders', title: 'Riders', icon: '🛵', items: riderBillingPartners, emptyText: 'No riders found.' },
+    { key: 'staffs', title: 'Staffs', icon: '👥', items: staffBillingPartners, emptyText: 'No staffs found.' },
+  ];
+
   return (
     <View>
       <Text style={styles.eyebrow}>ADMIN OPERATIONS</Text>
       <Text style={styles.title}>{titles[section]}</Text>
       {!!error && <Text style={styles.error}>{error}</Text>}
+      {!!successMessage && <Text style={styles.successMessage}>{successMessage}</Text>}
       {loading ? <ActivityIndicator color="#d83a32" style={styles.loader} /> : (
         <>
           {section === 'finance' && (
@@ -847,7 +989,96 @@ export default function AdminOperations({
                 <View style={styles.card}>
                   <Text style={styles.cardTitle}>Create a transfer</Text>
                   <TextInput style={styles.input} placeholder="Recipient user ID" value={form.recipientId} onChangeText={(value) => setForm((current) => ({ ...current, recipientId: value }))} />
-                  <TextInput style={styles.input} placeholder="Transfer type: wallet or credit_points" value={form.transferType} onChangeText={(value) => setForm((current) => ({ ...current, transferType: value }))} autoCapitalize="none" />
+
+                  {/* Transfer Type Dropdown */}
+                  <View style={styles.dropdownContainer}>
+                    <Text style={styles.dropdownLabel}>Transfer type</Text>
+                    <Pressable
+                      onPress={() => setTransferTypeDropdownOpen((prev) => !prev)}
+                      style={styles.dropdownTrigger}
+                      accessibilityRole="button"
+                      accessibilityLabel="Select transfer type"
+                    >
+                      <View style={styles.dropdownTriggerLeft}>
+                        <Text style={styles.dropdownTriggerIcon}>
+                          {form.transferType === 'wallet' ? '👛' : '⭐'}
+                        </Text>
+                        <Text style={styles.dropdownTriggerText}>
+                          {form.transferType === 'wallet' ? 'Wallet' : 'Credit Point'}
+                        </Text>
+                      </View>
+                      <Text style={styles.dropdownArrow}>{transferTypeDropdownOpen ? '▲' : '▼'}</Text>
+                    </Pressable>
+
+                    {transferTypeDropdownOpen && (
+                      <View style={styles.dropdownMenu}>
+                        <Pressable
+                          style={[
+                            styles.dropdownOption,
+                            form.transferType === 'wallet' && styles.dropdownOptionActive,
+                          ]}
+                          onPress={() => {
+                            setForm((c) => ({ ...c, transferType: 'wallet' }));
+                            setTransferTypeDropdownOpen(false);
+                          }}
+                        >
+                          <View style={styles.dropdownOptionLeft}>
+                            <Text style={styles.dropdownOptionIcon}>👛</Text>
+                            <View>
+                              <Text
+                                style={[
+                                  styles.dropdownOptionTitle,
+                                  form.transferType === 'wallet' && styles.dropdownOptionTitleActive,
+                                ]}
+                              >
+                                Wallet
+                              </Text>
+                              <Text style={styles.dropdownOptionSub}>
+                                Transfer directly to recipient's wallet balance
+                              </Text>
+                            </View>
+                          </View>
+                          {form.transferType === 'wallet' && (
+                            <Text style={styles.dropdownCheck}>✓</Text>
+                          )}
+                        </Pressable>
+
+                        <View style={styles.dropdownDivider} />
+
+                        <Pressable
+                          style={[
+                            styles.dropdownOption,
+                            form.transferType === 'credit_point' && styles.dropdownOptionActive,
+                          ]}
+                          onPress={() => {
+                            setForm((c) => ({ ...c, transferType: 'credit_point' }));
+                            setTransferTypeDropdownOpen(false);
+                          }}
+                        >
+                          <View style={styles.dropdownOptionLeft}>
+                            <Text style={styles.dropdownOptionIcon}>⭐</Text>
+                            <View>
+                              <Text
+                                style={[
+                                  styles.dropdownOptionTitle,
+                                  form.transferType === 'credit_point' && styles.dropdownOptionTitleActive,
+                                ]}
+                              >
+                                Credit Point
+                              </Text>
+                              <Text style={styles.dropdownOptionSub}>
+                                Transfer reward credit points to recipient
+                              </Text>
+                            </View>
+                          </View>
+                          {form.transferType === 'credit_point' && (
+                            <Text style={styles.dropdownCheck}>✓</Text>
+                          )}
+                        </Pressable>
+                      </View>
+                    )}
+                  </View>
+
                   <TextInput style={styles.input} placeholder="Amount" keyboardType="decimal-pad" value={form.amount} onChangeText={(value) => setForm((current) => ({ ...current, amount: value }))} />
                   <TextInput style={styles.input} placeholder="Purpose" value={form.purpose} onChangeText={(value) => setForm((current) => ({ ...current, purpose: value }))} />
                   <TextInput style={styles.input} placeholder="Order number (optional)" value={form.orderNumber} onChangeText={(value) => setForm((current) => ({ ...current, orderNumber: value }))} />
@@ -958,103 +1189,228 @@ export default function AdminOperations({
           )}
           {section === 'billing' && (
             <View>
-              {billingPartners.map((partner, index) => (
-                <View key={text(partner._id || partner.id, String(index))} style={styles.card}>
-                  <Text style={styles.cardTitle}>{text(partner.name, 'Partner')} · {text(partner.partnerType)}</Text>
-                  <InfoLine label="Week" value={partner.week || partner.weekLabel} />
-                  <InfoLine label="Status" value={partner.status} />
-                  <InfoLine label="Orders" value={partner.totalOrders} />
-                  <InfoLine label="Gross volume" value={money(partner.grossVolume)} />
-                  <InfoLine label="Total payable" value={money(partner.totalPayable)} />
-                  <InfoLine label="Total paid" value={money(partner.totalPaid)} />
-                  <InfoLine label="Pending balance" value={money(partner.totalPending)} />
-                  <Pressable
-                    disabled={!!busy || Number(partner.totalPending || 0) <= 0 || String(partner.payoutStatus || '').toLowerCase() === 'paid'}
-                    style={styles.primaryButton}
-                    onPress={() => void settlePartner(partner)}
-                  >
-                    <Text style={styles.primaryText}>
-                      {busy === `settle-${text(partner.partnerId || partner._id || partner.id, '')}`
-                        ? 'Settling…'
-                        : Number(partner.totalPending || 0) <= 0 ? 'No pending balance' : 'Settle weekly balance'}
-                    </Text>
-                  </Pressable>
-                </View>
-              ))}
-              {!billingPartners.length && <Text style={styles.muted}>No billing partners were returned.</Text>}
+              {billingCategories.map((cat) => {
+                const isExpanded = !!billingExpanded[cat.key];
+                return (
+                  <View key={cat.key} style={styles.billingCategoryCard}>
+                    <Pressable
+                      style={styles.billingCategoryHeader}
+                      onPress={() => toggleBillingCategory(cat.key)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${isExpanded ? 'Contract' : 'Expand'} ${cat.title}`}
+                    >
+                      <View style={styles.billingCategoryTitleRow}>
+                        <Text style={styles.billingCategoryIcon}>{cat.icon}</Text>
+                        <Text style={styles.billingCategoryTitle}>{cat.title}</Text>
+                        <View style={styles.billingCountBadge}>
+                          <Text style={styles.billingCountText}>{cat.items.length}</Text>
+                        </View>
+                      </View>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={isExpanded ? `Contract ${cat.title}` : `Expand ${cat.title}`}
+                        style={styles.expandCollapseBtn}
+                        onPress={() => toggleBillingCategory(cat.key)}
+                      >
+                        <Text style={styles.expandCollapseBtnText}>{isExpanded ? '−' : '+'}</Text>
+                      </Pressable>
+                    </Pressable>
+
+                    {isExpanded && (
+                      <View style={styles.billingCategoryBody}>
+                        {cat.items.length > 0 ? (
+                          cat.items.map((partner, index) => {
+                            const partnerId = text(partner.partnerId || partner._id || partner.id, String(index));
+                            const isSettled = String(partner.payoutStatus || '').toLowerCase() === 'paid' || String(partner.payoutStatus || '').toLowerCase() === 'settled';
+                            const pendingNum = Number(partner.totalPending || 0);
+                            return (
+                              <View key={partnerId} style={styles.nestedPartnerCard}>
+                                <Text style={styles.cardTitle}>
+                                  {text(partner.name, 'Partner')} · {text(partner.partnerCode || partner.partnerType)}
+                                </Text>
+                                <InfoLine label="Week" value={partner.week || partner.weekLabel || 'Current'} />
+                                <InfoLine label="Status" value={partner.status || (isSettled ? 'Settled' : 'Pending')} />
+                                <InfoLine label="Orders" value={partner.totalOrders || 0} />
+                                <InfoLine label="Gross volume" value={money(partner.grossVolume)} />
+                                <InfoLine label="Total payable" value={money(partner.totalPayable)} />
+                                <InfoLine label="Total paid" value={money(partner.totalPaid)} />
+                                <InfoLine label="Pending balance" value={money(partner.totalPending)} />
+                                {cat.key !== 'staffs' && (
+                                  <Pressable
+                                    disabled={!!busy || pendingNum <= 0 || isSettled}
+                                    style={[styles.primaryButton, (pendingNum <= 0 || isSettled) && styles.disabledButton]}
+                                    onPress={() => void settlePartner(partner)}
+                                  >
+                                    <Text style={styles.primaryText}>
+                                      {busy === `settle-${text(partner.partnerId || partner._id || partner.id, '')}`
+                                        ? 'Settling…'
+                                        : pendingNum <= 0 ? 'No pending balance' : 'Settle weekly balance'}
+                                    </Text>
+                                  </Pressable>
+                                )}
+                              </View>
+                            );
+                          })
+                        ) : (
+                          <Text style={styles.muted}>{cat.emptyText}</Text>
+                        )}
+                      </View>
+                    )}
+                  </View>
+                );
+              })}
             </View>
           )}
           {section === 'coupons' && (
             <View>
               {canManage && (
                 <View style={styles.card}>
-                  <Text style={styles.cardTitle}>{editingCouponId ? 'Edit platform coupon' : 'Create platform coupon'}</Text>
-                  <TextInput style={styles.input} placeholder="Code" autoCapitalize="characters" value={form.code} onChangeText={(value) => setForm((current) => ({ ...current, code: value }))} />
-                  <TextInput style={styles.input} placeholder="Title" value={form.title} onChangeText={(value) => setForm((current) => ({ ...current, title: value }))} />
-                  <TextInput style={styles.input} placeholder="Description (optional)" value={form.description} onChangeText={(value) => setForm((current) => ({ ...current, description: value }))} />
-                  <Text style={styles.fieldLabel}>Coupon type</Text>
-                  <View style={styles.actions}>
-                    {adminCouponTypes.map((value) => (
-                      <Pressable key={value} style={[styles.secondaryButton, form.couponType === value && styles.selectedButton]} onPress={() => setForm((current) => ({ ...current, couponType: value }))}>
-                        <Text style={styles.secondaryText}>{value.replaceAll('_', ' ')}</Text>
-                      </Pressable>
-                    ))}
+                  <View style={styles.couponHeaderRow}>
+                    <Text style={styles.cardTitle}>{editingCouponId ? 'Edit platform coupon' : 'Create platform coupon'}</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={couponFormExpanded ? 'Contract coupon form' : 'Expand coupon form'}
+                      style={styles.expandCollapseBtn}
+                      onPress={() => setCouponFormExpanded((prev) => !prev)}
+                    >
+                      <Text style={styles.expandCollapseBtnText}>{couponFormExpanded ? '−' : '+'}</Text>
+                    </Pressable>
                   </View>
-                  <Text style={styles.fieldLabel}>Sponsor</Text>
-                  <View style={styles.actions}>
-                    {(['tomato', 'common'] as const).map((value) => (
-                      <Pressable key={value} style={[styles.secondaryButton, form.sponsorType === value && styles.selectedButton]} onPress={() => setForm((current) => ({ ...current, sponsorType: value }))}>
-                        <Text style={styles.secondaryText}>{value}</Text>
+
+                  {couponFormExpanded && (
+                    <View style={styles.couponFormBody}>
+                      <TextInput style={styles.input} placeholder="Code" autoCapitalize="characters" value={form.code} onChangeText={(value) => setForm((current) => ({ ...current, code: value }))} />
+                      <TextInput style={styles.input} placeholder="Title" value={form.title} onChangeText={(value) => setForm((current) => ({ ...current, title: value }))} />
+                      <TextInput style={styles.input} placeholder="Description (optional)" value={form.description} onChangeText={(value) => setForm((current) => ({ ...current, description: value }))} />
+                      <Text style={styles.fieldLabel}>Coupon type</Text>
+                      <View style={styles.actions}>
+                        {adminCouponTypes.map((value) => (
+                          <Pressable key={value} style={[styles.secondaryButton, form.couponType === value && styles.selectedButton]} onPress={() => setForm((current) => ({ ...current, couponType: value }))}>
+                            <Text style={styles.secondaryText}>{value.replaceAll('_', ' ')}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                      <Text style={styles.fieldLabel}>Sponsor</Text>
+                      <View style={styles.actions}>
+                        {(['tomato', 'common', 'restaurant', 'shop'] as const).map((value) => (
+                          <Pressable key={value} style={[styles.secondaryButton, form.sponsorType === value && styles.selectedButton]} onPress={() => setForm((current) => ({ ...current, sponsorType: value }))}>
+                            <Text style={styles.secondaryText}>{value}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                      <Text style={styles.fieldLabel}>Discount type</Text>
+                      <View style={styles.actions}>
+                        {(['percentage', 'flat'] as const).map((value) => (
+                          <Pressable key={value} style={[styles.secondaryButton, form.discountType === value && styles.selectedButton]} onPress={() => setForm((current) => ({ ...current, discountType: value }))}>
+                            <Text style={styles.secondaryText}>{value}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                      <TextInput style={styles.input} placeholder={form.discountType === 'percentage' ? 'Discount percentage (e.g. 50)' : 'Discount flat amount (e.g. 100)'} keyboardType="decimal-pad" value={form.discountValue} onChangeText={(value) => setForm((current) => ({ ...current, discountValue: value }))} />
+                      <TextInput style={styles.input} placeholder="Minimum order amount (optional)" keyboardType="decimal-pad" value={form.minOrderAmount} onChangeText={(value) => setForm((current) => ({ ...current, minOrderAmount: value }))} />
+                      <TextInput style={styles.input} placeholder="Maximum discount amount cap (optional)" keyboardType="decimal-pad" value={form.maxDiscountAmount} onChangeText={(value) => setForm((current) => ({ ...current, maxDiscountAmount: value }))} />
+                      <TextInput style={styles.input} placeholder="Target item category (optional, e.g. Biryani)" value={form.targetItemCategory} onChangeText={(value) => setForm((current) => ({ ...current, targetItemCategory: value }))} />
+                      <TextInput style={styles.input} placeholder="Occasion name (optional, e.g. Diwali)" value={form.occasionName} onChangeText={(value) => setForm((current) => ({ ...current, occasionName: value }))} />
+                      <TextInput
+                        style={styles.input}
+                        placeholder={(form.couponType === 'specific_user' || form.couponType === 'instant')
+                          ? 'Target customer ID, email, or phone (Required)*'
+                          : 'Target customer ID, email, or phone (optional)'}
+                        value={form.targetUserIdentifier}
+                        onChangeText={(value) => setForm((current) => ({ ...current, targetUserIdentifier: value }))}
+                      />
+                      <Text style={styles.fieldLabel}>Applicable Store Type</Text>
+                      <View style={styles.actions}>
+                        {(['all', 'restaurant', 'shop'] as const).map((value) => (
+                          <Pressable key={value} style={[styles.secondaryButton, (form.applicableStoreType || 'all') === value && styles.selectedButton]} onPress={() => setForm((current) => ({ ...current, applicableStoreType: value }))}>
+                            <Text style={styles.secondaryText}>{value === 'all' ? 'All (Restaurant & Shop)' : value.charAt(0).toUpperCase() + value.slice(1)}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                      <TextInput style={styles.input} placeholder="Per-user usage limit (optional, default 1)" keyboardType="number-pad" value={form.usageLimitPerUser} onChangeText={(value) => setForm((current) => ({ ...current, usageLimitPerUser: value }))} />
+                      <TextInput style={styles.input} placeholder="Total usage limit across all users (optional)" keyboardType="number-pad" value={form.totalUsageLimit} onChangeText={(value) => setForm((current) => ({ ...current, totalUsageLimit: value }))} />
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Valid from (DD/MM/YYYY, optional)"
+                        keyboardType="numbers-and-punctuation"
+                        value={form.validFrom}
+                        onChangeText={(value) => setForm((current) => ({ ...current, validFrom: applyDateMask(value, current.validFrom) }))}
+                      />
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Valid until (DD/MM/YYYY, optional)"
+                        keyboardType="numbers-and-punctuation"
+                        value={form.validUntil}
+                        onChangeText={(value) => setForm((current) => ({ ...current, validUntil: applyDateMask(value, current.validUntil) }))}
+                      />
+                      <Pressable disabled={busy === (editingCouponId || 'create-coupon')} style={styles.primaryButton} onPress={() => void createCoupon()}>
+                        <Text style={styles.primaryText}>{busy === 'create-coupon' || busy === editingCouponId ? 'Saving…' : 'Save'}</Text>
                       </Pressable>
-                    ))}
-                  </View>
-                  <Text style={styles.fieldLabel}>Discount type</Text>
-                  <View style={styles.actions}>
-                    {(['percentage', 'flat'] as const).map((value) => (
-                      <Pressable key={value} style={[styles.secondaryButton, form.discountType === value && styles.selectedButton]} onPress={() => setForm((current) => ({ ...current, discountType: value }))}>
-                        <Text style={styles.secondaryText}>{value}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                  <TextInput style={styles.input} placeholder="Discount value" keyboardType="decimal-pad" value={form.discountValue} onChangeText={(value) => setForm((current) => ({ ...current, discountValue: value }))} />
-                  <TextInput style={styles.input} placeholder="Minimum order amount (optional)" keyboardType="decimal-pad" value={form.minOrderAmount} onChangeText={(value) => setForm((current) => ({ ...current, minOrderAmount: value }))} />
-                  <TextInput style={styles.input} placeholder="Maximum discount (optional)" keyboardType="decimal-pad" value={form.maxDiscountAmount} onChangeText={(value) => setForm((current) => ({ ...current, maxDiscountAmount: value }))} />
-                  <TextInput style={styles.input} placeholder="Target item category (optional)" value={form.targetItemCategory} onChangeText={(value) => setForm((current) => ({ ...current, targetItemCategory: value }))} />
-                  <TextInput style={styles.input} placeholder="Occasion name (optional)" value={form.occasionName} onChangeText={(value) => setForm((current) => ({ ...current, occasionName: value }))} />
-                  <TextInput style={styles.input} placeholder="Target customer email/phone (optional)" value={form.targetUserIdentifier} onChangeText={(value) => setForm((current) => ({ ...current, targetUserIdentifier: value }))} />
-                  <TextInput style={styles.input} placeholder="Applicable store type (optional)" value={form.applicableStoreType} onChangeText={(value) => setForm((current) => ({ ...current, applicableStoreType: value }))} />
-                  <TextInput style={styles.input} placeholder="Per-user usage limit (optional)" keyboardType="number-pad" value={form.usageLimitPerUser} onChangeText={(value) => setForm((current) => ({ ...current, usageLimitPerUser: value }))} />
-                  <TextInput style={styles.input} placeholder="Total usage limit (optional)" keyboardType="number-pad" value={form.totalUsageLimit} onChangeText={(value) => setForm((current) => ({ ...current, totalUsageLimit: value }))} />
-                  <TextInput style={styles.input} placeholder="Valid from (ISO date)" value={form.validFrom} onChangeText={(value) => setForm((current) => ({ ...current, validFrom: value }))} />
-                  <TextInput style={styles.input} placeholder="Valid until (ISO date)" value={form.validUntil} onChangeText={(value) => setForm((current) => ({ ...current, validUntil: value }))} />
-                  <Pressable disabled={busy === (editingCouponId || 'create-coupon')} style={styles.primaryButton} onPress={() => void createCoupon()}>
-                    <Text style={styles.primaryText}>{busy === 'create-coupon' || busy === editingCouponId ? 'Saving…' : editingCouponId ? 'Save coupon' : 'Create coupon'}</Text>
-                  </Pressable>
-                  {!!editingCouponId && <Pressable style={styles.secondaryButton} onPress={() => setEditingCouponId('')}><Text style={styles.secondaryText}>Cancel edit</Text></Pressable>}
-                </View>
-              )}
-              {coupons.map((coupon, index) => (
-                <View key={text(coupon._id || coupon.id, String(index))} style={styles.card}>
-                  <Text style={styles.cardTitle}>{coupon.code || 'Coupon'} · {coupon.title || 'Untitled'}</Text>
-                  <InfoLine label="Discount" value={`${text(coupon.discountValue)} ${text(coupon.discountType)}`} />
-                  <InfoLine label="Status" value={coupon.isActive} />
-                  <InfoLine label="Uses" value={coupon.usedCount || coupon.totalUsage} />
-                  {canManage && (
-                    <View style={styles.actions}>
-                      <Pressable style={styles.secondaryButton} onPress={() => editCoupon(coupon)}>
-                        <Text style={styles.secondaryText}>Edit</Text>
-                      </Pressable>
-                      <Pressable disabled={!!busy} style={styles.secondaryButton} onPress={() => void toggleAdminCoupon(coupon)}>
-                        <Text style={styles.secondaryText}>{coupon.isActive ? 'Deactivate' : 'Activate'}</Text>
-                      </Pressable>
-                      <Pressable disabled={!!busy} style={styles.dangerButton} onPress={() => void deleteCoupon(coupon)}>
-                        <Text style={styles.dangerText}>{busy === `coupon-${text(coupon._id || coupon.id, '')}` ? 'Deleting…' : 'Delete coupon'}</Text>
-                      </Pressable>
+                      {!!editingCouponId && (
+                        <Pressable style={styles.secondaryButton} onPress={() => { setEditingCouponId(''); setCouponFormExpanded(false); }}>
+                          <Text style={styles.secondaryText}>Cancel edit</Text>
+                        </Pressable>
+                      )}
                     </View>
                   )}
                 </View>
-              ))}
-              {!coupons.length && <Text style={styles.muted}>No platform coupons were returned.</Text>}
+              )}
+              {/* All coupons expandable tab */}
+              <View style={styles.billingCategoryCard}>
+                <Pressable
+                  style={styles.billingCategoryHeader}
+                  onPress={() => setAllCouponsExpanded((prev) => !prev)}
+                  accessibilityRole="button"
+                  accessibilityLabel={allCouponsExpanded ? 'Contract all coupons' : 'Expand all coupons'}
+                >
+                  <View style={styles.billingCategoryTitleRow}>
+                    <Text style={styles.billingCategoryIcon}>🏷️</Text>
+                    <Text style={styles.billingCategoryTitle}>All coupons</Text>
+                    <View style={styles.billingCountBadge}>
+                      <Text style={styles.billingCountText}>{coupons.length}</Text>
+                    </View>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={allCouponsExpanded ? 'Contract all coupons' : 'Expand all coupons'}
+                    style={styles.expandCollapseBtn}
+                    onPress={() => setAllCouponsExpanded((prev) => !prev)}
+                  >
+                    <Text style={styles.expandCollapseBtnText}>{allCouponsExpanded ? '−' : '+'}</Text>
+                  </Pressable>
+                </Pressable>
+
+                {allCouponsExpanded && (
+                  <View style={styles.billingCategoryBody}>
+                    {coupons.length > 0 ? (
+                      coupons.map((coupon, index) => (
+                        <View key={text(coupon._id || coupon.id, String(index))} style={styles.nestedPartnerCard}>
+                          <Text style={styles.cardTitle}>{coupon.code || 'Coupon'} · {coupon.title || 'Untitled'}</Text>
+                          <InfoLine label="Discount" value={`${text(coupon.discountValue)} ${text(coupon.discountType)}`} />
+                          <InfoLine label="Status" value={coupon.isActive} />
+                          <InfoLine label="Uses" value={coupon.usedCount || coupon.totalUsage} />
+                          <InfoLine label="Valid until" value={coupon.validUntil ? isoToDmy(coupon.validUntil) : 'No expiry'} />
+                          {canManage && (
+                            <View style={styles.actions}>
+                              <Pressable style={styles.secondaryButton} onPress={() => editCoupon(coupon)}>
+                                <Text style={styles.secondaryText}>Edit</Text>
+                              </Pressable>
+                              <Pressable disabled={!!busy} style={styles.secondaryButton} onPress={() => void toggleAdminCoupon(coupon)}>
+                                <Text style={styles.secondaryText}>{coupon.isActive ? 'Deactivate' : 'Activate'}</Text>
+                              </Pressable>
+                              <Pressable disabled={!!busy} style={styles.dangerButton} onPress={() => void deleteCoupon(coupon)}>
+                                <Text style={styles.dangerText}>{busy === `coupon-${text(coupon._id || coupon.id, '')}` ? 'Deleting…' : 'Delete coupon'}</Text>
+                              </Pressable>
+                            </View>
+                          )}
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.muted}>No platform coupons were returned.</Text>
+                    )}
+                  </View>
+                )}
+              </View>
             </View>
           )}
           {section === 'analytics' && (
@@ -1356,6 +1712,34 @@ const styles = StyleSheet.create({
   title: { color: '#2d2621', fontSize: 23, fontWeight: '800', marginTop: 4, marginBottom: 10 },
   card: { backgroundColor: 'rgba(255, 255, 255, 0.85)', padding: 14, borderRadius: 20, borderWidth: 1.5, borderColor: 'rgba(255, 255, 255, 0.95)', marginBottom: 10, shadowColor: '#a82c24', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 3 },
   cardTitle: { color: '#292421', fontSize: 14, fontWeight: '800', marginBottom: 7 },
+  couponHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+  },
+  expandCollapseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#d83a32',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#d83a32',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  expandCollapseBtnText: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '800',
+    lineHeight: 22,
+  },
+  couponFormBody: {
+    marginTop: 6,
+  },
   muted: { color: '#766d68', fontSize: 12, lineHeight: 18, marginTop: 3 },
   input: { minHeight: 42, borderWidth: 1.2, borderColor: 'rgba(255, 255, 255, 0.95)', borderRadius: 14, paddingHorizontal: 12, marginTop: 8, color: '#292421', backgroundColor: 'rgba(255, 255, 255, 0.78)' },
   fieldLabel: { color: '#463e39', fontSize: 12, fontWeight: '700', marginTop: 10 },
@@ -1375,6 +1759,7 @@ const styles = StyleSheet.create({
   dangerButton: { minHeight: 36, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fae7e4', borderRadius: 10, paddingHorizontal: 11, paddingVertical: 8, alignSelf: 'flex-start', marginTop: 7 },
   dangerText: { color: '#a9241c', fontWeight: '800', fontSize: 11 },
   error: { color: '#a9241c', backgroundColor: '#fae7e4', padding: 10, borderRadius: 9, marginBottom: 8 },
+  successMessage: { color: '#047857', backgroundColor: '#ecfdf5', borderColor: '#a7f3d0', borderWidth: 1, padding: 10, borderRadius: 9, marginBottom: 8, fontWeight: '700', fontSize: 11 },
   loader: { marginTop: 25 },
   flex: { flex: 1 },
   analyticsTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -1456,4 +1841,163 @@ const styles = StyleSheet.create({
   rankName: { fontSize: 13, fontWeight: '700', color: '#1e293b' },
   rankMeta: { fontSize: 11, color: '#64748b', marginTop: 1 },
   rankAmount: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
+  dropdownContainer: {
+    marginTop: 8,
+  },
+  dropdownLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#766d68',
+    marginBottom: 4,
+  },
+  dropdownTrigger: {
+    minHeight: 42,
+    borderColor: 'rgba(255, 255, 255, 0.95)',
+    borderWidth: 1.2,
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  dropdownTriggerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  dropdownTriggerIcon: {
+    fontSize: 16,
+  },
+  dropdownTriggerText: {
+    color: '#302923',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  dropdownArrow: {
+    color: '#82786f',
+    fontSize: 11,
+  },
+  dropdownMenu: {
+    backgroundColor: '#ffffff',
+    borderColor: '#fcdcd5',
+    borderWidth: 1.5,
+    borderRadius: 14,
+    marginTop: 4,
+    padding: 6,
+    shadowColor: '#a82c24',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
+  },
+  dropdownOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+  },
+  dropdownOptionActive: {
+    backgroundColor: '#fff0eb',
+  },
+  dropdownOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  dropdownOptionIcon: {
+    fontSize: 18,
+  },
+  dropdownOptionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#302923',
+  },
+  dropdownOptionTitleActive: {
+    color: '#d83a32',
+    fontWeight: '800',
+  },
+  dropdownOptionSub: {
+    fontSize: 11,
+    color: '#82786f',
+    marginTop: 2,
+  },
+  dropdownCheck: {
+    color: '#d83a32',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  dropdownDivider: {
+    height: 1,
+    backgroundColor: '#f3e8df',
+    marginVertical: 4,
+  },
+  billingCategoryCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.95)',
+    marginBottom: 10,
+    shadowColor: '#a82c24',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+    overflow: 'hidden',
+  },
+  billingCategoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 14,
+  },
+  billingCategoryTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  billingCategoryIcon: {
+    fontSize: 18,
+  },
+  billingCategoryTitle: {
+    color: '#292421',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  billingCountBadge: {
+    backgroundColor: '#fff0eb',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: '#fcdcd5',
+  },
+  billingCountText: {
+    color: '#d83a32',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  billingCategoryBody: {
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+    paddingTop: 4,
+  },
+  nestedPartnerCard: {
+    backgroundColor: '#ffffff',
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1.2,
+    borderColor: '#eee3da',
+    marginTop: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
 });

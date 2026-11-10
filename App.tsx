@@ -77,7 +77,7 @@ export default function App() {
       SecureStore.getItemAsync(SESSION_KEY).catch(() => null),
       timeoutPromise,
     ])
-      .then((stored) => {
+      .then(async (stored) => {
         if (!active || !stored) return;
         try {
           const restored = JSON.parse(stored) as Session;
@@ -88,8 +88,11 @@ export default function App() {
               || isAdminUser(restored.user || {})
             )
           ) {
-            const user = {
+            const fallbackPin = (await SecureStore.getItemAsync('tomato.customer.saved_digipin').catch(() => null)) || undefined;
+            const effectivePin = restored.user?.digipin || fallbackPin;
+            const user: User = {
               ...restored.user,
+              ...(effectivePin ? { digipin: effectivePin } : {}),
               ...((restored.user?.role === 'customer' || !restored.user?.role) && !restored.user?.customerId
                 ? { customerId: 'cust-1001' }
                 : {}),
@@ -98,11 +101,14 @@ export default function App() {
 
             // Background non-blocking profile validation
             apiRequest<{ user: User }>('/api/auth/profile', restored.token)
-              .then((res) => {
+              .then(async (res) => {
                 if (active && res?.user) {
-                  const updatedUser = {
+                  const storedPin = (await SecureStore.getItemAsync('tomato.customer.saved_digipin').catch(() => null)) || undefined;
+                  const effectiveDigipin = res.user.digipin || user.digipin || storedPin;
+                  const updatedUser: User = {
                     ...user,
                     ...res.user,
+                    ...(effectiveDigipin ? { digipin: effectiveDigipin } : {}),
                     ...((res.user.role === 'customer' || user.role === 'customer' || !res.user.role) && !res.user.customerId && !user.customerId
                       ? { customerId: 'cust-1001' }
                       : {}),
@@ -136,8 +142,14 @@ export default function App() {
   }, []);
 
   async function signIn(token: string, user: User) {
-    const normalizedUser = {
+    const storedPin = (await SecureStore.getItemAsync('tomato.customer.saved_digipin').catch(() => null)) || undefined;
+    const effectiveDigipin: string | undefined = user.digipin || storedPin;
+    if (effectiveDigipin) {
+      await SecureStore.setItemAsync('tomato.customer.saved_digipin', effectiveDigipin).catch(() => null);
+    }
+    const normalizedUser: User = {
       ...user,
+      ...(effectiveDigipin ? { digipin: effectiveDigipin } : {}),
       ...((user.role === 'customer' || !user.role) && !user.customerId ? { customerId: 'cust-1001' } : {}),
     };
     const nextSession = { token, user: normalizedUser };
@@ -154,9 +166,15 @@ export default function App() {
 
   async function updateSessionUser(user: User) {
     if (!session) return;
-    const mergedUser = {
+    const storedPin = (await SecureStore.getItemAsync('tomato.customer.saved_digipin').catch(() => null)) || undefined;
+    const effectiveDigipin: string | undefined = user.digipin || session.user.digipin || storedPin;
+    if (effectiveDigipin) {
+      await SecureStore.setItemAsync('tomato.customer.saved_digipin', effectiveDigipin).catch(() => null);
+    }
+    const mergedUser: User = {
       ...session.user,
       ...user,
+      ...(effectiveDigipin ? { digipin: effectiveDigipin } : {}),
       ...((user.role === 'customer' || session.user.role === 'customer' || !user.role) && !user.customerId && !session.user.customerId
         ? { customerId: 'cust-1001' }
         : {}),
